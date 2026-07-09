@@ -19,7 +19,7 @@ const cases = JSON.parse(readFileSync(casesUrl, 'utf8'));
 
 if (mode === '--emit') {
   const { embed } = await import('./embed.mjs');
-  const qvecs = await embed(cases.map(c => c.query));
+  const qvecs = await embed(cases.map(c => c.query), { kind: 'query' });
   const bundle = cases.map((c, i) => ({
     id: i,
     query: c.query,

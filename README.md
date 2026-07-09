@@ -135,10 +135,16 @@ node eval-judge.mjs --score verdicts.json  # Recall@K / MRR / P@K from judged re
 
 The judge decides relevance by **meaning**, language- and keyword-agnostic. On this corpus the
 keyword eval reported 50–80% Recall@5 while the LLM-judged eval reported **30%** — the gap *is* the
-overcounting. 30% is the honest baseline to improve against; the misses point at concrete levers:
-de-duplicating chunks that appear under two project paths, filtering assistant narration more
-aggressively, a stronger retrieval model (e5 / bge-m3), and hybrid lexical+vector for exact-term
-queries. `eval-bundle.json` / `verdicts.json` are gitignored (they contain transcript text).
+overcounting. 30% became the honest baseline to improve against.
+
+Acting on the misses **doubled it to 60% Recall@5** (MRR 0.18 → 0.47) with four changes, each
+re-measured on the same judge: a real retrieval model (`multilingual-e5-small` with `query:`/`passage:`
+prefixes) instead of a paraphrase model, **search-time de-duplication** of identical chunks that
+appear under two project paths, purging harness noise (`clean.mjs` removes task/tool notifications
+that polluted retrieval), and toning down the recency boost that was over-promoting today's sessions.
+Remaining misses point at the next levers: the giant multi-topic audit report chunks match too many
+queries (chunk large reports smaller), and hybrid lexical+vector for exact-term queries (error codes,
+IDs). `eval-bundle.json` / `verdicts.json` are gitignored (they contain transcript text).
 
 ## How updating works (incremental)
 

@@ -57,7 +57,7 @@ function dot(a, b) {
 
 // Búsqueda top-k. project opcional (filtro exacto), since opcional (ISO date mínima).
 // recencyBoost: mezcla similitud con recencia para que lo reciente pese un poco más.
-export function searchChunks(db, qvec, { project = null, k = 8, since = null, recencyBoost = 0.15 } = {}) {
+export function searchChunks(db, qvec, { project = null, k = 8, since = null, recencyBoost = 0.05 } = {}) {
   let sql = 'SELECT project, session, ts, role, text, embedding FROM chunks WHERE embedding IS NOT NULL';
   const params = [];
   if (project) { sql += ' AND project = ?'; params.push(project); }
@@ -75,7 +75,18 @@ export function searchChunks(db, qvec, { project = null, k = 8, since = null, re
     return { project: r.project, session: r.session, ts: r.ts, role: r.role, text: r.text, score: sim + boost, sim };
   });
   scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, k);
+  // dedup: el mismo texto aparece bajo varios paths/proyectos (p.ej. my-project y my-project)
+  // y desperdicia slots del top-k. Colapsamos por texto normalizado, quedándonos con el mejor.
+  const seen = new Set();
+  const out = [];
+  for (const s of scored) {
+    const key = s.text.replace(/\s+/g, ' ').trim().slice(0, 300);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+    if (out.length >= k) break;
+  }
+  return out;
 }
 
 export function listProjects(db) {

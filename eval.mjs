@@ -12,7 +12,7 @@ const K = Number(process.argv[2] || 5);
 const cases = JSON.parse(readFileSync(new URL('./eval-cases.json', import.meta.url), 'utf8'));
 const db = openDb();
 
-const qvecs = await embed(cases.map(c => c.query));
+const qvecs = await embed(cases.map(c => c.query), { kind: 'query' });
 
 let hits = 0, rrSum = 0;
 console.log(`\nRecall eval — K=${K}, ${cases.length} known-item queries\n`);

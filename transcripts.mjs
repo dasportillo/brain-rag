@@ -13,7 +13,9 @@ export function projectFromPath(filePath) {
 // Ruido que NO queremos en el índice (wrappers de comandos, stdout local, reminders del harness).
 function isNoise(text) {
   const t = text.trimStart();
-  return /^<(command-name|command-message|command-args|local-command|bash-|system-reminder|user-prompt-submit)/.test(t);
+  // wrappers de comandos, stdout local, reminders y notificaciones del harness (tool/task) = ruido
+  return /^<(command-name|command-message|command-args|local-command|bash-|system-reminder|user-prompt-submit|task-notification|tool-notification)/.test(t)
+    || /^\[SYSTEM NOTIFICATION/.test(t);
 }
 
 // Redacción de secretos obvios: el corpus tiene JWTs, keys AWS, etc.
