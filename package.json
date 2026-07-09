@@ -1,0 +1,18 @@
+{
+  "name": "brain",
+  "version": "0.1.0",
+  "description": "Segundo cerebro RAG global sobre los transcripts de Claude Code",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "ingest": "node ingest.mjs",
+    "search": "node search.mjs",
+    "stats": "node ingest.mjs --stats",
+    "serve": "node server.mjs"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.3.0",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.24.0"
+  }
+}

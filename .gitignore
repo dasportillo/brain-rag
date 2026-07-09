@@ -1,0 +1,14 @@
+node_modules/
+
+# Local index + runtime artifacts (never commit — contains your conversation data)
+brain.db
+brain.db-wal
+brain.db-shm
+*.log
+
+# Embedding model cache
+.cache/
+models/
+
+# OS
+.DS_Store
