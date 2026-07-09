@@ -1,7 +1,7 @@
-// Parseo, chunking y redacción de los transcripts .jsonl de Claude Code.
+// Parse, chunk, and redact Claude Code .jsonl transcripts.
 import { readFileSync } from 'node:fs';
 
-// El nombre del proyecto sale del directorio dashificado que usa Claude Code:
+// The project name comes from the dashified directory Claude Code uses:
 //   /Users/x/.claude/projects/-Users-you-project-my-project/<sess>.jsonl
 // -> "my-project"
 export function projectFromPath(filePath) {
@@ -10,15 +10,15 @@ export function projectFromPath(filePath) {
   return m[1].replace(/^-Users-[^-]+-project-/, '').replace(/^-+/, '') || m[1];
 }
 
-// Ruido que NO queremos en el índice (wrappers de comandos, stdout local, reminders del harness).
+// Noise we do NOT want in the index (command wrappers, local stdout, harness reminders).
 function isNoise(text) {
   const t = text.trimStart();
-  // wrappers de comandos, stdout local, reminders y notificaciones del harness (tool/task) = ruido
+  // command wrappers, local stdout, harness reminders and notifications (tool/task) = noise
   return /^<(command-name|command-message|command-args|local-command|bash-|system-reminder|user-prompt-submit|task-notification|tool-notification)/.test(t)
     || /^\[SYSTEM NOTIFICATION/.test(t);
 }
 
-// Redacción de secretos obvios: el corpus tiene JWTs, keys AWS, etc.
+// Redact obvious secrets: the corpus contains JWTs, AWS keys, etc.
 export function redact(text) {
   return text
     .replace(/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, '[JWT_REDACTED]')
@@ -28,7 +28,7 @@ export function redact(text) {
     .replace(/ghp_[A-Za-z0-9]{30,}/g, '[GH_TOKEN_REDACTED]');
 }
 
-// Genera los turnos útiles (user en texto + bloques text del assistant), descartando ruido.
+// Yields the useful turns (user text + assistant text blocks), dropping noise.
 export function* parseTurns(filePath) {
   const content = readFileSync(filePath, 'utf8');
   for (const line of content.split('\n')) {
@@ -52,9 +52,9 @@ export function* parseTurns(filePath) {
   }
 }
 
-// Corta un texto largo en ventanas de ~size chars con solape.
-// NOTA (resultado medido): probamos chunks de ~900 con partición por líneas y el eval REGRESÓ
-// 80%→70% (diluyó chunks de término exacto como el bug de groups-claim). Se revirtió a 1800.
+// Splits a long text into ~size-char windows with overlap.
+// NOTE (measured result): we tried ~900-char chunks split on lines and the eval REGRESSED
+// 80%→70% (it diluted exact-term chunks like the groups-claim bug). Reverted to 1800.
 export function chunkText(text, size = 1800, overlap = 200) {
   if (text.length <= size) return [text];
   const out = [];

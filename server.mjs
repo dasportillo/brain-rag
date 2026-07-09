@@ -1,5 +1,5 @@
-// MCP server GLOBAL: expone tu segundo cerebro a Claude Code en cualquier proyecto.
-// Se registra con:  claude mcp add brain --scope user -- node ~/.claude/brain/server.mjs
+// GLOBAL MCP server: exposes your second brain to Claude Code in any project.
+// Register with:  claude mcp add brain --scope user -- node ~/.claude/brain/server.mjs
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -34,7 +34,7 @@ const server = new McpServer(
   }
 );
 
-// Auto-detecta el proyecto actual desde el cwd (mismo dashificado que usa Claude Code).
+// Auto-detect the current project from the cwd (same dashification Claude Code uses).
 function currentProject() {
   const dashed = '-' + process.cwd().replace(/^\//, '').replace(/\//g, '-');
   return dashed.replace(/^-Users-[^-]+-project-/, '').replace(/^-+/, '');
@@ -44,42 +44,42 @@ server.tool(
   'search_context',
   'Searches the history of work conversations (all projects). Returns the most relevant chunks with project/date. USE IT when the user asks "what did we decide about X?", "how did I solve Y?", "what did we do with Z?", "search the brain for…" / "buscá en el brain…", or before assuming there is no prior context on a topic. Recovers past decisions and work.',
   {
-    query: z.string().describe('qué buscar, en lenguaje natural'),
-    project: z.string().optional().describe('filtrar a un proyecto; omitir para buscar en todos'),
-    k: z.number().optional().describe('cantidad de resultados (default 8)'),
-    since: z.string().optional().describe('fecha ISO mínima, ej 2026-06-01'),
+    query: z.string().describe('what to search for, in natural language'),
+    project: z.string().optional().describe('filter to one project; omit to search all'),
+    k: z.number().optional().describe('number of results (default 8)'),
+    since: z.string().optional().describe('minimum ISO date, e.g. 2026-06-01'),
   },
   async ({ query, project, k = 8, since }) => {
     const qvec = await embedOne(query);
     const hits = searchChunks(db, qvec, { project: project ?? null, k, since: since ?? null, queryText: query });
     const text = hits.length
       ? hits.map(h => `### ${h.project} · ${h.ts?.slice(0, 10) ?? '?'} · ${h.role} (score ${h.score.toFixed(3)})\n${h.text}`).join('\n\n')
-      : 'Sin resultados.';
+      : 'No results.';
     return { content: [{ type: 'text', text }] };
   }
 );
 
 server.tool(
   'list_projects',
-  'Lista los proyectos indexados en el segundo cerebro, con nº de sesiones/chunks y última actividad.',
+  'Lists the projects indexed in the second brain, with session/chunk counts and last activity.',
   {},
   async () => {
     const rows = listProjects(db);
-    const text = rows.map(r => `- ${r.project}: ${r.sessions} sesiones, ${r.chunks} chunks, última ${r.last_activity?.slice(0, 10) ?? '?'}`).join('\n');
-    return { content: [{ type: 'text', text: text || 'Índice vacío.' }] };
+    const text = rows.map(r => `- ${r.project}: ${r.sessions} sessions, ${r.chunks} chunks, last ${r.last_activity?.slice(0, 10) ?? '?'}`).join('\n');
+    return { content: [{ type: 'text', text: text || 'Index empty.' }] };
   }
 );
 
 server.tool(
   'get_state',
   'Returns the curated CURRENT state of a project (state/<project>.md), the precise source of "where I am today". USE IT when the user asks "where did I leave off?", "give me the state of X", "what state is X in?", "what do you know about this project?" / "en qué quedé", "dame el estado de X". If it does not exist, say so and offer to create it.',
-  { project: z.string().optional().describe('proyecto; por defecto el del cwd actual') },
+  { project: z.string().optional().describe('project; defaults to the current cwd') },
   async ({ project }) => {
     const p = project || currentProject();
     const file = join(BRAIN_DIR, 'state', `${p}.md`);
     const text = existsSync(file)
       ? readFileSync(file, 'utf8')
-      : `No hay estado curado para "${p}". Creá ${file} para fijarlo.`;
+      : `No curated state for "${p}". Create ${file} to set it.`;
     return { content: [{ type: 'text', text }] };
   }
 );

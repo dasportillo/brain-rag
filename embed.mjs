@@ -1,10 +1,10 @@
-// Embeddings LOCALES (transformers.js). El modelo se descarga una vez y queda cacheado.
-// Nada sale de la máquina -> privado, gratis, offline. Vector normalizado de 384 dims.
+// LOCAL embeddings (transformers.js). The model downloads once and is cached.
+// Nothing leaves the machine -> private, free, offline. Normalized 384-dim vector.
 //
-// Modelo de RETRIEVAL multilingüe: multilingual-e5-small (384 dims, drop-in). e5 es un modelo
-// entrenado para retrieval (no paráfrasis) y requiere prefijos asimétricos "query: " / "passage: "
-// para que la consulta y el documento caigan en el mismo espacio — por eso embed() toma `kind`.
-// Cambiá con BRAIN_MODEL.
+// Multilingual RETRIEVAL model: multilingual-e5-small (384 dims, drop-in). e5 is a model
+// trained for retrieval (not paraphrase) and needs asymmetric prefixes "query: " / "passage: "
+// so the query and the document land in the same space — that's why embed() takes `kind`.
+// Swap via BRAIN_MODEL.
 import { pipeline, env } from '@huggingface/transformers';
 
 export const DIM = 384;
@@ -17,7 +17,7 @@ function withPrefix(texts, kind) {
   return texts.map(t => p + t);
 }
 
-env.allowRemoteModels = true; // permitir bajar el modelo la primera vez
+env.allowRemoteModels = true; // allow downloading the model on the first run
 
 let extractorP = null;
 function getExtractor() {
@@ -25,7 +25,7 @@ function getExtractor() {
   return extractorP;
 }
 
-// Embebe un array de textos en batches; devuelve array de arrays (Float32 normalizados).
+// Embeds an array of texts in batches; returns an array of arrays (normalized Float32).
 export async function embed(texts, { batch = 32, kind = 'passage' } = {}) {
   const ex = await getExtractor();
   const input = withPrefix(texts, kind);

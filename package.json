@@ -1,7 +1,7 @@
 {
   "name": "brain",
   "version": "0.1.0",
-  "description": "Segundo cerebro RAG global sobre los transcripts de Claude Code",
+  "description": "Global RAG second brain over your Claude Code transcripts",
   "type": "module",
   "private": true,
   "scripts": {

@@ -1,6 +1,6 @@
-// Almacenamiento: SQLite integrado de Node (node:sqlite, sin compilación nativa).
-// Los embeddings se guardan como BLOB (Float32Array) y la búsqueda es coseno por fuerza
-// bruta en JS — a esta escala (decenas de miles de chunks) es instantáneo y sin dependencias.
+// Storage: Node's built-in SQLite (node:sqlite, no native compilation).
+// Embeddings are stored as a BLOB (Float32Array) and search is brute-force cosine
+// in JS — at this scale (tens of thousands of chunks) it's instant and dependency-free.
 import { DatabaseSync } from 'node:sqlite';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -40,7 +40,7 @@ export function openDb() {
   return db;
 }
 
-// Float32Array -> BLOB y viceversa
+// Float32Array -> BLOB and back
 export function vecToBlob(vec) {
   return Buffer.from(new Float32Array(vec).buffer);
 }
@@ -48,22 +48,22 @@ function blobToVec(u8) {
   return new Float32Array(u8.buffer, u8.byteOffset, Math.floor(u8.byteLength / 4));
 }
 
-// Coseno = producto punto (los vectores vienen normalizados del embedder).
+// Cosine = dot product (vectors come normalized from the embedder).
 function dot(a, b) {
   let s = 0;
   for (let i = 0; i < a.length; i++) s += a[i] * b[i];
   return s;
 }
 
-// Búsqueda top-k. project opcional (filtro exacto), since opcional (ISO date mínima).
-// recencyBoost: mezcla similitud con recencia para que lo reciente pese un poco más.
-// Stopwords ES/EN comunes; tokeniza conservando ':' y '_' (groups-claim, snake_case).
+// Top-k search. project optional (exact filter), since optional (min ISO date).
+// recencyBoost: mixes similarity with recency so recent items weigh a bit more.
+// Common ES/EN stopwords; tokenizes keeping ':' and '_' (groups-claim, snake_case).
 const STOP = new Set('the and for are with that this its you our from into not but has have was were will can los las una unos unas del que con por para como más pero sus este esta esto son ser una the'.split(/\s+/));
 function tokenize(q) {
   return [...new Set((q.toLowerCase().match(/[a-z0-9_:]{3,}/g) || []).filter(t => !STOP.has(t)))];
 }
 
-// Búsqueda top-k. Con `queryText` hace HÍBRIDA (vector + léxico fusionados por RRF); sin él, vector puro.
+// Top-k search. With `queryText` it goes HYBRID (vector + lexical fused via RRF); without it, pure vector.
 export function searchChunks(db, qvec, { project = null, k = 8, since = null, recencyBoost = 0.05, queryText = null } = {}) {
   let sql = 'SELECT project, session, ts, role, text, embedding FROM chunks WHERE embedding IS NOT NULL';
   const params = [];
@@ -78,14 +78,14 @@ export function searchChunks(db, qvec, { project = null, k = 8, since = null, re
   const terms = queryText ? tokenize(queryText) : [];
   let scored;
   if (terms.length) {
-    // léxico: solapamiento de términos ponderado por rareza (idf sobre el set candidato)
+    // lexical: term overlap weighted by rarity (idf over the candidate set)
     const N = cand.length, idf = {};
     for (const t of terms) {
       let df = 0; for (const c of cand) if (c.lc.includes(t)) df++;
       idf[t] = Math.log(1 + N / (df + 1));
     }
     for (const c of cand) c.lex = terms.reduce((s, t) => s + (c.lc.includes(t) ? idf[t] : 0), 0);
-    // RRF: fusiona el ranking por vector y el ranking por léxico (robusto, sin normalizar escalas)
+    // RRF: fuses the vector ranking and the lexical ranking (robust, no scale normalization)
     const byVec = [...cand].sort((a, b) => b.sim - a.sim);
     const byLex = cand.filter(c => c.lex > 0).sort((a, b) => b.lex - a.lex);
     const RRF = 60, rrf = new Map();
@@ -97,7 +97,7 @@ export function searchChunks(db, qvec, { project = null, k = 8, since = null, re
   }
 
   scored.sort((a, b) => b.score - a.score);
-  // dedup: el mismo texto aparece bajo varios paths/proyectos y desperdicia slots del top-k.
+  // dedup: the same text appears under several paths/projects and wastes top-k slots.
   const seen = new Set(), out = [];
   for (const s of scored) {
     const key = s.text.replace(/\s+/g, ' ').trim().slice(0, 300);

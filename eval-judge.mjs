@@ -21,8 +21,8 @@ if (mode === '--emit') {
   const { embed } = await import('./embed.mjs');
   const qvecs = await embed(cases.map(c => c.query), { kind: 'query' });
   const bundle = cases.map((c, i) => {
-    // leakage guard: sobre-buscar y descartar chunks que repiten la consulta textual
-    // (ecos de esta misma sesión) — si no, el eval se auto-contamina y mide de más.
+    // leakage guard: over-fetch and drop chunks that echo the query text
+    // (echoes of this same session) — otherwise the eval self-contaminates and over-measures.
     const sig = c.query.toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 40);
     const clean = searchChunks(db, qvecs[i], { k: K * 5, project: c.project ?? null, queryText: c.query })
       .filter(r => !r.text.toLowerCase().replace(/\s+/g, ' ').includes(sig))

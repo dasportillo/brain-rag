@@ -30,8 +30,8 @@ const exact = db.prepare('SELECT 1 FROM chunks WHERE project = ? LIMIT 1').get(p
 if (!exact) {
   const like = db.prepare('SELECT DISTINCT project FROM chunks WHERE project LIKE ?').all(`%${project}%`);
   if (like.length === 1) proj = like[0].project;
-  else if (like.length > 1) { console.error(`ambiguo "${project}": ${like.map(r => r.project).join(', ')}`); process.exit(1); }
-  else { console.error(`sin actividad para "${project}"`); process.exit(1); }
+  else if (like.length > 1) { console.error(`ambiguous "${project}": ${like.map(r => r.project).join(', ')}`); process.exit(1); }
+  else { console.error(`no activity for "${project}"`); process.exit(1); }
 }
 
 const rows = db.prepare(

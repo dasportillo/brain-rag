@@ -1,17 +1,17 @@
-// Ingesta INCREMENTAL de todos los transcripts de la máquina hacia el store.
+// INCREMENTAL ingestion of every transcript on the machine into the store.
 //
-// Cómo actualiza (la parte clave):
-//   - Cada sesión = un archivo .jsonl. Guardamos su (mtime, bytes) en la tabla `sessions`.
-//   - En cada corrida, por archivo:
-//       * si no cambió (mismo mtime y bytes) -> SKIP (no re-embebe nada).
-//       * si es nuevo o creció (sesión activa) -> borra sus chunks viejos y re-indexa SOLO ese.
-//   - Resultado: la primera corrida indexa todo; las siguientes solo tocan lo nuevo/cambiado.
+// How it updates (the key part):
+//   - Each session = one .jsonl file. We store its (mtime, bytes) in the `sessions` table.
+//   - On every run, per file:
+//       * if unchanged (same mtime and bytes) -> SKIP (nothing is re-embedded).
+//       * if new or grown (active session) -> delete its old chunks and re-index ONLY that one.
+//   - Result: the first run indexes everything; later runs only touch what's new/changed.
 //
-// Uso:
-//   node ingest.mjs               # incremental, con embeddings
-//   node ingest.mjs --no-embed    # solo parsea/chunkea/guarda (rápido, sin modelo)
-//   node ingest.mjs --limit 5     # procesa hasta 5 sesiones (para probar)
-//   node ingest.mjs --stats       # muestra el estado del índice y sale
+// Usage:
+//   node ingest.mjs               # incremental, with embeddings
+//   node ingest.mjs --no-embed    # only parse/chunk/store (fast, no model)
+//   node ingest.mjs --limit 5     # process up to 5 sessions (for testing)
+//   node ingest.mjs --stats       # print index status and exit
 import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -24,7 +24,7 @@ const has = (f) => args.includes(f);
 const val = (f, d) => (has(f) ? args[args.indexOf(f) + 1] : d);
 const LIMIT = Number(val('--limit', Infinity));
 const NO_EMBED = has('--no-embed');
-const FORCE = has('--force'); // re-procesa aunque no haya cambiado (p.ej. para backfill de embeddings)
+const FORCE = has('--force'); // re-process even if unchanged (e.g. to backfill embeddings)
 
 function findTranscripts(dir) {
   const out = [];
@@ -43,7 +43,7 @@ if (has('--stats')) {
   process.exit(0);
 }
 
-// El embedder se importa perezosamente: sin --no-embed no cargamos el modelo.
+// The embedder is imported lazily: without --no-embed we don't load the model.
 let embed = null;
 if (!NO_EMBED) ({ embed } = await import('./embed.mjs'));
 
@@ -70,7 +70,7 @@ for (const file of files) {
   const records = [];
   for (const turn of parseTurns(file)) {
     for (const piece of chunkText(redact(turn.text))) {
-      // descartar chunks minúsculos (narración tipo "Let me check X" antes de un tool call)
+      // drop tiny chunks (narration like "Let me check X" before a tool call)
       if (piece.trim().length < 80) continue;
       records.push({ session: turn.session, ts: turn.ts, role: turn.role, text: piece });
     }
@@ -95,5 +95,5 @@ for (const file of files) {
   }
 }
 
-console.log(`\n✔ ingest: ${processed} procesadas, ${skipped} sin cambios (skip), ${totalChunks} chunks nuevos${NO_EMBED ? ' (sin embeddings)' : ''}`);
+console.log(`\n✔ ingest: ${processed} processed, ${skipped} unchanged (skip), ${totalChunks} new chunks${NO_EMBED ? ' (no embeddings)' : ''}`);
 console.log(stats(db));

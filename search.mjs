@@ -1,5 +1,5 @@
-// Búsqueda por línea de comandos (para probar el RAG sin el MCP).
-//   node search.mjs "cómo funciona el bridge users documents"
+// Command-line search (to test the RAG without the MCP).
+//   node search.mjs "how the users documents bridge works"
 //   node search.mjs --project my-project "audit hash chain"
 import { openDb, searchChunks } from './store.mjs';
 import { embedOne } from './embed.mjs';
@@ -10,7 +10,7 @@ const project = pi >= 0 ? args[pi + 1] : null;
 const skip = new Set(pi >= 0 ? [pi, pi + 1] : []);
 const query = args.filter((_, i) => !skip.has(i)).join(' ').trim();
 
-if (!query) { console.error('uso: node search.mjs [--project X] "consulta"'); process.exit(1); }
+if (!query) { console.error('usage: node search.mjs [--project X] "query"'); process.exit(1); }
 
 const db = openDb();
 const qvec = await embedOne(query);
