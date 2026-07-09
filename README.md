@@ -121,6 +121,25 @@ re-measure. A concrete example from this project: the first eval (English `all-M
 **multilingual** model addressed exactly that failure mode. Add cases to `eval-cases.json` as you
 find gaps.
 
+### LLM-as-judge (the trustworthy instrument)
+
+Keyword matching (`eval.mjs`) is fast but **overcounts** — a chunk can contain the marker token yet
+be irrelevant, and a relevant chunk in another language contains no English marker at all. So the
+authoritative eval is `eval-judge.mjs`, which decouples retrieval from judging:
+
+```bash
+node eval-judge.mjs --emit                 # retrieve top-K per query -> eval-bundle.json
+# an LLM judges which results are actually relevant -> verdicts.json
+node eval-judge.mjs --score verdicts.json  # Recall@K / MRR / P@K from judged relevance
+```
+
+The judge decides relevance by **meaning**, language- and keyword-agnostic. On this corpus the
+keyword eval reported 50–80% Recall@5 while the LLM-judged eval reported **30%** — the gap *is* the
+overcounting. 30% is the honest baseline to improve against; the misses point at concrete levers:
+de-duplicating chunks that appear under two project paths, filtering assistant narration more
+aggressively, a stronger retrieval model (e5 / bge-m3), and hybrid lexical+vector for exact-term
+queries. `eval-bundle.json` / `verdicts.json` are gitignored (they contain transcript text).
+
 ## How updating works (incremental)
 
 Each session is one `.jsonl` file. The `sessions` table stores its `(mtime, bytes)`. On every run,

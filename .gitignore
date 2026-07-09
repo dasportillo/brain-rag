@@ -6,6 +6,10 @@ brain.db-wal
 brain.db-shm
 *.log
 
+# Eval artifacts (contain retrieved transcript text)
+eval-bundle.json
+verdicts.json
+
 # Embedding model cache
 .cache/
 models/
