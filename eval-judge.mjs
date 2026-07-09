@@ -20,12 +20,19 @@ const cases = JSON.parse(readFileSync(casesUrl, 'utf8'));
 if (mode === '--emit') {
   const { embed } = await import('./embed.mjs');
   const qvecs = await embed(cases.map(c => c.query), { kind: 'query' });
-  const bundle = cases.map((c, i) => ({
-    id: i,
-    query: c.query,
-    results: searchChunks(db, qvecs[i], { k: K, project: c.project ?? null, queryText: c.query })
-      .map((r, ri) => ({ rank: ri + 1, project: r.project, ts: r.ts?.slice(0, 10) ?? '?', score: +r.score.toFixed(3), text: r.text })),
-  }));
+  const bundle = cases.map((c, i) => {
+    // leakage guard: sobre-buscar y descartar chunks que repiten la consulta textual
+    // (ecos de esta misma sesión) — si no, el eval se auto-contamina y mide de más.
+    const sig = c.query.toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 40);
+    const clean = searchChunks(db, qvecs[i], { k: K * 5, project: c.project ?? null, queryText: c.query })
+      .filter(r => !r.text.toLowerCase().replace(/\s+/g, ' ').includes(sig))
+      .slice(0, K);
+    return {
+      id: i,
+      query: c.query,
+      results: clean.map((r, ri) => ({ rank: ri + 1, project: r.project, ts: r.ts?.slice(0, 10) ?? '?', score: +r.score.toFixed(3), text: r.text })),
+    };
+  });
   writeFileSync(bundleUrl, JSON.stringify(bundle, null, 2));
   console.log(`✔ emitted eval-bundle.json — ${bundle.length} queries × top-${K}`);
 } else if (mode === '--score') {

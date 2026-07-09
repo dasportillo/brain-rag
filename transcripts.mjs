@@ -52,7 +52,9 @@ export function* parseTurns(filePath) {
   }
 }
 
-// Corta un texto largo en ventanas de ~size chars con solape (chunk semántico simple).
+// Corta un texto largo en ventanas de ~size chars con solape.
+// NOTA (resultado medido): probamos chunks de ~900 con partición por líneas y el eval REGRESÓ
+// 80%→70% (diluyó chunks de término exacto como el bug de groups-claim). Se revirtió a 1800.
 export function chunkText(text, size = 1800, overlap = 200) {
   if (text.length <= size) return [text];
   const out = [];
