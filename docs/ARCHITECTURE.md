@@ -72,11 +72,16 @@ reasonable middle for conversational text.
 
 ## Stage 4 — Embed (`embed.mjs`)
 
-Uses `@huggingface/transformers` (transformers.js) with `Xenova/all-MiniLM-L6-v2`:
+Uses `@huggingface/transformers` (transformers.js) with `Xenova/paraphrase-multilingual-MiniLM-L12-v2`:
 
 - 384-dimensional, mean-pooled, L2-normalized vectors.
-- The model (~23 MB quantized) downloads once and is cached; subsequent runs are offline.
+- The model downloads once and is cached; subsequent runs are offline.
 - Batched (default 32) to bound memory.
+
+**Why multilingual.** The corpus is bilingual (Spanish work chats + English tooling). An
+English-only model (`all-MiniLM-L6-v2`) fails cross-lingual retrieval: an English query scored ~0.60
+against Spanish content that a Spanish query scored ~0.82 on — a measured 80%→ gap surfaced by the
+eval (see below). The multilingual model keeps 384 dims, so it is a drop-in swap with no store change.
 
 Because vectors are normalized, **cosine similarity reduces to a dot product**, which keeps search
 trivial and fast.
@@ -142,10 +147,17 @@ nohup node "~/.claude/brain/ingest.mjs" >> "~/.claude/brain/ingest.log" 2>&1 &
 Detaching means it never blocks session close; the incremental logic means it only processes the
 session that just ended. It is added alongside any existing `SessionEnd` hooks, not in place of them.
 
+## Evaluation (`eval.mjs`)
+
+Retrieval quality is measured with a known-item recall eval. `eval-cases.json` holds labeled cases —
+each a natural-language paraphrase of something known to be in the corpus, plus `expectAny` regexes
+that a correct chunk should match. `eval.mjs` embeds every query, runs `searchChunks`, and reports
+**Recall@K** (fraction of queries whose top-K contains a matching chunk) and **MRR**. It doubles as a
+regression guard: change chunking or the model, re-run, and see whether recall moved. Grow the case
+set whenever a real query misses.
+
 ## Known limitations / next steps
 
-- **No eval.** Retrieval quality is currently judged by eye. A labeled recall set (query → expected
-  chunk) is the next real step.
 - **Chunking is char-based**, not token-aware or semantic-boundary-aware.
 - **`get_state` notes are manual** — there is no flow yet to generate/update `state/<project>.md`.
 - **Single embedding model.** No hybrid lexical+vector (BM25) fallback for exact-term queries.

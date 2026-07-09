@@ -1,9 +1,13 @@
 // Embeddings LOCALES (transformers.js). El modelo se descarga una vez y queda cacheado.
 // Nada sale de la máquina -> privado, gratis, offline. Vector normalizado de 384 dims.
+//
+// Modelo MULTILINGÜE: el corpus es bilingüe (español/inglés) y un modelo solo-inglés
+// (all-MiniLM-L6-v2) falla el cruce ES<->EN. paraphrase-multilingual-MiniLM-L12-v2 mantiene
+// 384 dims (drop-in) y mejora recall en consultas cruzadas. Cambiá con BRAIN_MODEL.
 import { pipeline, env } from '@huggingface/transformers';
 
 export const DIM = 384;
-const MODEL = process.env.BRAIN_MODEL || 'Xenova/all-MiniLM-L6-v2';
+const MODEL = process.env.BRAIN_MODEL || 'Xenova/paraphrase-multilingual-MiniLM-L12-v2';
 
 env.allowRemoteModels = true; // permitir bajar el modelo la primera vez
 
