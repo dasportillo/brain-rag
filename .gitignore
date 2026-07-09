@@ -10,6 +10,9 @@ brain.db-shm
 eval-bundle.json
 verdicts.json
 
+# Per-project curated state notes (contain your work details)
+state/
+
 # Embedding model cache
 .cache/
 models/

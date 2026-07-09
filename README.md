@@ -102,6 +102,20 @@ node ingest.mjs --stats
 node eval.mjs        # run the recall eval (see Evaluation)
 ```
 
+### Current state layer (`get_state`)
+
+`get_state` serves a curated `state/<project>.md` — the precise "where am I parked today" note that
+complements the fuzzy recall of `search_context`. Generate/refresh one from a project's recent brain
+activity:
+
+```bash
+node state.mjs --list        # projects with activity
+node state.mjs my-notes       # dump a project's recent material...
+# ...which an LLM synthesizes into state/<project>.md (Now / In flight / Decisions / Blockers / Next)
+```
+
+The notes are gitignored — they contain your work details.
+
 ## Evaluation
 
 Retrieval quality is measured, not eyeballed. `eval.mjs` runs a labeled set of **known-item**
@@ -182,9 +196,10 @@ the brain stays current with no manual step.
 
 ## Roadmap
 
-- `state/<project>.md` curation flow for `get_state` (the precise layer).
-- Grow `eval-cases.json` and track Recall@K over time as chunking/model change.
-- Hybrid retrieval (lexical BM25 + vector) for exact-term queries like error codes / IDs.
+- Grow `eval-cases.json` well beyond 10 cases and exclude eval sessions from the corpus (avoid
+  overfitting and the RAG indexing its own eval runs).
+- Auto-refresh `state/<project>.md` on a cadence instead of on demand.
+- A stronger retrieval model (e.g. bge-m3) — measure only once the eval set is larger.
 - Optional connectors (Slack, other chat exports) as additional corpora.
 
 ## Files
