@@ -28,7 +28,7 @@ server.tool(
   },
   async ({ query, project, k = 8, since }) => {
     const qvec = await embedOne(query);
-    const hits = searchChunks(db, qvec, { project: project ?? null, k, since: since ?? null });
+    const hits = searchChunks(db, qvec, { project: project ?? null, k, since: since ?? null, queryText: query });
     const text = hits.length
       ? hits.map(h => `### ${h.project} · ${h.ts?.slice(0, 10) ?? '?'} · ${h.role} (score ${h.score.toFixed(3)})\n${h.text}`).join('\n\n')
       : 'Sin resultados.';

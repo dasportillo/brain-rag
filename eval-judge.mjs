@@ -23,7 +23,7 @@ if (mode === '--emit') {
   const bundle = cases.map((c, i) => ({
     id: i,
     query: c.query,
-    results: searchChunks(db, qvecs[i], { k: K, project: c.project ?? null })
+    results: searchChunks(db, qvecs[i], { k: K, project: c.project ?? null, queryText: c.query })
       .map((r, ri) => ({ rank: ri + 1, project: r.project, ts: r.ts?.slice(0, 10) ?? '?', score: +r.score.toFixed(3), text: r.text })),
   }));
   writeFileSync(bundleUrl, JSON.stringify(bundle, null, 2));

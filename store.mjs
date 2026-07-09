@@ -57,7 +57,14 @@ function dot(a, b) {
 
 // Búsqueda top-k. project opcional (filtro exacto), since opcional (ISO date mínima).
 // recencyBoost: mezcla similitud con recencia para que lo reciente pese un poco más.
-export function searchChunks(db, qvec, { project = null, k = 8, since = null, recencyBoost = 0.05 } = {}) {
+// Stopwords ES/EN comunes; tokeniza conservando ':' y '_' (groups-claim, snake_case).
+const STOP = new Set('the and for are with that this its you our from into not but has have was were will can los las una unos unas del que con por para como más pero sus este esta esto son ser una the'.split(/\s+/));
+function tokenize(q) {
+  return [...new Set((q.toLowerCase().match(/[a-z0-9_:]{3,}/g) || []).filter(t => !STOP.has(t)))];
+}
+
+// Búsqueda top-k. Con `queryText` hace HÍBRIDA (vector + léxico fusionados por RRF); sin él, vector puro.
+export function searchChunks(db, qvec, { project = null, k = 8, since = null, recencyBoost = 0.05, queryText = null } = {}) {
   let sql = 'SELECT project, session, ts, role, text, embedding FROM chunks WHERE embedding IS NOT NULL';
   const params = [];
   if (project) { sql += ' AND project = ?'; params.push(project); }
@@ -65,20 +72,33 @@ export function searchChunks(db, qvec, { project = null, k = 8, since = null, re
   const rows = db.prepare(sql).all(...params);
 
   const now = Date.now();
-  const scored = rows.map(r => {
-    const sim = dot(qvec, blobToVec(r.embedding));
-    let boost = 0;
-    if (recencyBoost && r.ts) {
-      const ageDays = (now - Date.parse(r.ts)) / 86400000;
-      boost = recencyBoost * Math.exp(-ageDays / 45); // decae ~1.5 meses
+  const recency = (ts) => (recencyBoost && ts) ? recencyBoost * Math.exp(-((now - Date.parse(ts)) / 86400000) / 45) : 0;
+  const cand = rows.map((r, i) => ({ i, r, sim: dot(qvec, blobToVec(r.embedding)), lc: r.text.toLowerCase() }));
+
+  const terms = queryText ? tokenize(queryText) : [];
+  let scored;
+  if (terms.length) {
+    // léxico: solapamiento de términos ponderado por rareza (idf sobre el set candidato)
+    const N = cand.length, idf = {};
+    for (const t of terms) {
+      let df = 0; for (const c of cand) if (c.lc.includes(t)) df++;
+      idf[t] = Math.log(1 + N / (df + 1));
     }
-    return { project: r.project, session: r.session, ts: r.ts, role: r.role, text: r.text, score: sim + boost, sim };
-  });
+    for (const c of cand) c.lex = terms.reduce((s, t) => s + (c.lc.includes(t) ? idf[t] : 0), 0);
+    // RRF: fusiona el ranking por vector y el ranking por léxico (robusto, sin normalizar escalas)
+    const byVec = [...cand].sort((a, b) => b.sim - a.sim);
+    const byLex = cand.filter(c => c.lex > 0).sort((a, b) => b.lex - a.lex);
+    const RRF = 60, rrf = new Map();
+    byVec.forEach((c, idx) => rrf.set(c.i, (rrf.get(c.i) || 0) + 1 / (RRF + idx + 1)));
+    byLex.forEach((c, idx) => rrf.set(c.i, (rrf.get(c.i) || 0) + 1 / (RRF + idx + 1)));
+    scored = cand.map(c => ({ project: c.r.project, session: c.r.session, ts: c.r.ts, role: c.r.role, text: c.r.text, score: rrf.get(c.i) || 0, sim: c.sim }));
+  } else {
+    scored = cand.map(c => ({ project: c.r.project, session: c.r.session, ts: c.r.ts, role: c.r.role, text: c.r.text, score: c.sim + recency(c.r.ts), sim: c.sim }));
+  }
+
   scored.sort((a, b) => b.score - a.score);
-  // dedup: el mismo texto aparece bajo varios paths/proyectos (p.ej. my-project y my-project)
-  // y desperdicia slots del top-k. Colapsamos por texto normalizado, quedándonos con el mejor.
-  const seen = new Set();
-  const out = [];
+  // dedup: el mismo texto aparece bajo varios paths/proyectos y desperdicia slots del top-k.
+  const seen = new Set(), out = [];
   for (const s of scored) {
     const key = s.text.replace(/\s+/g, ' ').trim().slice(0, 300);
     if (seen.has(key)) continue;

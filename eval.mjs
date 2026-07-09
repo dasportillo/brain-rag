@@ -18,7 +18,7 @@ let hits = 0, rrSum = 0;
 console.log(`\nRecall eval — K=${K}, ${cases.length} known-item queries\n`);
 
 cases.forEach((c, i) => {
-  const res = searchChunks(db, qvecs[i], { k: K, project: c.project ?? null });
+  const res = searchChunks(db, qvecs[i], { k: K, project: c.project ?? null, queryText: c.query });
   const patterns = c.expectAny.map(p => new RegExp(p, 'i'));
   let rank = 0;
   for (let r = 0; r < res.length; r++) {

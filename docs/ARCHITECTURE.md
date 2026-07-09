@@ -107,9 +107,15 @@ few hundred thousand chunks, this is the first thing to revisit (add an ANN inde
 
 ### Ranking
 
-`searchChunks` scores each candidate as `cosine + recencyBoost`, where the boost decays exponentially
-with age (`0.15 * exp(-ageDays/45)`). This nudges recent conversations up without letting recency
-dominate similarity — a mitigation for the "stale decision resurfaces" failure mode.
+Pure-vector mode scores each candidate as `cosine + recencyBoost` (boost `0.05 * exp(-ageDays/45)`),
+a small nudge toward recent conversations without letting recency dominate.
+
+**Hybrid mode** (when `queryText` is passed) fuses two rankings with Reciprocal Rank Fusion (RRF):
+the vector ranking and a lexical ranking (rarity/idf-weighted term overlap over the candidate set).
+RRF (`score = Σ 1/(60 + rank)`) needs no score normalization and is robust to the two signals living
+on different scales. This is what recovers exact-term queries (error codes, `groups-claim`,
+`SKIP_KEYS`) that a pure embedding buries under long, semantically-broad chunks — it took the
+eval from 60% to 80% Recall@5.
 
 ## Incremental ingestion (`ingest.mjs`)
 

@@ -142,9 +142,12 @@ re-measured on the same judge: a real retrieval model (`multilingual-e5-small` w
 prefixes) instead of a paraphrase model, **search-time de-duplication** of identical chunks that
 appear under two project paths, purging harness noise (`clean.mjs` removes task/tool notifications
 that polluted retrieval), and toning down the recency boost that was over-promoting today's sessions.
-Remaining misses point at the next levers: the giant multi-topic audit report chunks match too many
-queries (chunk large reports smaller), and hybrid lexical+vector for exact-term queries (error codes,
-IDs). `eval-bundle.json` / `verdicts.json` are gitignored (they contain transcript text).
+Then adding **hybrid retrieval** (vector + lexical fused with Reciprocal Rank Fusion — pass
+`queryText` to `searchChunks`) took it to **80% Recall@5** (MRR 0.63): the exact-term queries that
+pure vectors missed (`groups-claim`, `SKIP_KEYS`) came back into the top-5. The two
+remaining misses need smaller chunks for very long multi-topic reports (a re-embed) — clear
+diminishing returns. `eval-bundle.json` / `verdicts.json` are gitignored (they contain transcript
+text).
 
 ## How updating works (incremental)
 

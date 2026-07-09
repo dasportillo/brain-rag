@@ -14,7 +14,7 @@ if (!query) { console.error('uso: node search.mjs [--project X] "consulta"'); pr
 
 const db = openDb();
 const qvec = await embedOne(query);
-const hits = searchChunks(db, qvec, { project, k: 8 });
+const hits = searchChunks(db, qvec, { project, k: 8, queryText: query });
 
 console.log(`\n🔎 "${query}"${project ? ` [${project}]` : ''}\n`);
 for (const h of hits) {
