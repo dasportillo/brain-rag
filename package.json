@@ -9,6 +9,7 @@
   "files": [
     "cli.mjs",
     "install.mjs",
+    "uninstall.mjs",
     "server.mjs",
     "store.mjs",
     "embed.mjs",

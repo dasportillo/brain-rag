@@ -88,6 +88,9 @@ claude mcp add brain --scope user -- npx -y brain-rag serve
 
 The `brain-rag` CLI also exposes `ingest`, `search`, `stats`, and `state` (`brain-rag help`).
 
+To uninstall: `npx -y brain-rag uninstall` (unregisters the MCP + removes the slash commands; add
+`--purge` to also delete the index and state notes).
+
 ### From source
 
 ```bash

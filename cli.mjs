@@ -13,12 +13,14 @@ switch (cmd) {
   case 'mark-keep':    await import('./mark-keep.mjs'); break;          // SessionStart opt-in hook
   case 'mark-current': await import('./mark-current-keep.mjs'); break;  // /brain backend
   case 'install':      await import('./install.mjs'); break;            // wire into Claude Code
+  case 'uninstall':    await import('./uninstall.mjs'); break;          // unregister + remove commands
   default:
     console.log(`brain-rag — local, private RAG second brain over your Claude Code transcripts
 
 Usage: brain-rag <command>
 
   install         Register the MCP server + slash commands, and print the hook wiring
+  uninstall       Reverse of install (add --purge to also delete the index + state)
   serve           Run the MCP server (stdio) — this is what 'claude mcp add' launches
   ingest          Ingest opted-in transcripts into the index
   stats           Print index status
