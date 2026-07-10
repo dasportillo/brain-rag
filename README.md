@@ -70,6 +70,26 @@ provides a **precise, curated** layer (`state/<project>.md`) that complements th
 
 Requires **Node 22.5+** (built-in `node:sqlite`). Tested on Node 25.
 
+### Via npm (recommended)
+
+```bash
+npx -y @dasportillo/brain-rag install
+```
+
+Registers the MCP server, installs the `/brain` and `/state` slash commands, and prints the opt-in
+hook wiring for `~/.claude/settings.json`. It is **npx-native** — the code runs straight from the npm
+package, nothing is copied; only the index and state notes live under `~/.claude/brain/`.
+
+Just the search side (no ingestion/hooks) — point Claude Code straight at the server:
+
+```bash
+claude mcp add brain --scope user -- npx -y @dasportillo/brain-rag serve
+```
+
+The `brain-rag` CLI also exposes `ingest`, `search`, `stats`, and `state` (`brain-rag help`).
+
+### From source
+
 ```bash
 git clone git@github.com:dasportillo/brain-rag.git
 cd brain-rag
