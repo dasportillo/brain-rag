@@ -16,9 +16,9 @@ cp "$REPO_DIR"/{transcripts,store,embed,ingest,search,server,mark-current-keep,m
 cp "$REPO_DIR"/package.json "$BRAIN_DIR"/
 [ -f "$REPO_DIR/package-lock.json" ] && cp "$REPO_DIR/package-lock.json" "$BRAIN_DIR"/
 
-# 2. Deploy the /brain slash command (opt the current session in mid-conversation).
+# 2. Deploy the slash commands (/brain = opt a session in, /state = write the curated state note).
 mkdir -p "$HOME/.claude/commands"
-cp "$REPO_DIR/commands/brain.md" "$HOME/.claude/commands/brain.md"
+cp "$REPO_DIR"/commands/*.md "$HOME/.claude/commands/"
 
 # 3. Dependencies (embedding model + MCP SDK).
 echo "▸ npm install"
@@ -65,6 +65,7 @@ cat <<EOF
      }
 
   c) Mid-session, run /brain to opt the CURRENT conversation in.
+  d) Run /state [project] to synthesize and save a project's current-state note (served by get_state).
 EOF
 
 echo "✔ done. Opt a session in (claude --brain or /brain), then: node \"$BRAIN_DIR/search.mjs\" \"what am I working on\""

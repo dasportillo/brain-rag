@@ -159,6 +159,10 @@ An MCP server (`@modelcontextprotocol/sdk`, stdio transport) exposing:
 - **`list_projects`** — aggregates the `chunks` table by project.
 - **`get_state`** — reads `state/<project>.md` (the curated, precise layer). Defaults to the project
   derived from the current working directory.
+- **`save_state`** — writes/overwrites `state/<project>.md`. The in-session model (via the `/state`
+  command) gathers recent activity with `state.mjs`, synthesizes the note, and calls this to persist
+  it — no external API, the LLM is already in the loop. Overwriting is deliberate: it removes stale
+  decisions instead of letting them resurface.
 
 Registered globally with `claude mcp add brain --scope user -- node ~/.claude/brain/server.mjs`, so
 the tools are available in every project's sessions.
@@ -193,5 +197,5 @@ set whenever a real query misses.
 ## Known limitations / next steps
 
 - **Chunking is char-based**, not token-aware or semantic-boundary-aware.
-- **`get_state` notes are manual** — there is no flow yet to generate/update `state/<project>.md`.
+- **`get_state` notes refresh on demand** — `/state` (→ `save_state`) regenerates `state/<project>.md`; there is no automatic cadence yet.
 - **Brute-force search.** No ANN index yet; revisit (`sqlite-vec` / FAISS) past a few hundred thousand chunks.
