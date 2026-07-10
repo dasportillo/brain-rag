@@ -25,6 +25,7 @@ raw material already exists — `brain-rag` turns those hundreds of sessions int
   - `search_context({query, project?, k?, since?})` — semantic search over past conversations.
   - `list_projects()` — indexed projects with session/chunk counts and last activity.
   - `get_state({project?})` — curated "current state" note for a project (the precise layer).
+  - `save_state({content, project?})` — write/refresh that curated note (overwrites; drops stale decisions).
 - **Opt-in by default** — a session is saved only via `claude --brain`, the `/brain` command, or being listed in `keep.list`; a `SessionEnd` hook then incrementally re-indexes the sessions you opted in.
 
 ## Architecture
@@ -103,19 +104,21 @@ node ingest.mjs --stats
 node eval.mjs        # run the recall eval (see Evaluation)
 ```
 
-### Current state layer (`get_state`)
+### Current state layer (`get_state` / `save_state`)
 
 `get_state` serves a curated `state/<project>.md` — the precise "where am I parked today" note that
-complements the fuzzy recall of `search_context`. Generate/refresh one from a project's recent brain
-activity:
+complements the fuzzy recall of `search_context`. Refresh it with the **`/state`** command, which
+drives the in-session model to gather recent activity, synthesize the note, and persist it via
+`save_state` — **no external API**, the LLM is already in the loop:
 
 ```bash
-node state.mjs --list        # projects with activity
-node state.mjs my-notes       # dump a project's recent material...
-# ...which an LLM synthesizes into state/<project>.md (Now / In flight / Decisions / Blockers / Next)
+node state.mjs --list         # projects with activity
+node state.mjs my-notes        # dump a project's recent material (what /state feeds on)
 ```
 
-The notes are gitignored — they contain your work details.
+`/state [project]` then writes `state/<project>.md` (Now / In flight / Decisions / Blockers / Next).
+Overwriting is deliberate: it removes stale/reverted decisions instead of letting them resurface. The
+notes are gitignored — they contain your work details.
 
 ## Evaluation
 
@@ -216,7 +219,8 @@ the brain stays current with no manual step.
 | `search.mjs` | CLI search |
 | `mark-keep.mjs` | `SessionStart` opt-in hook (`BRAIN=1` → `keep.list`) |
 | `mark-current-keep.mjs` | `/brain` backend — opt the current session in |
-| `commands/brain.md` | the `/brain` slash command |
+| `commands/brain.md` | the `/brain` slash command (opt a session in) |
+| `commands/state.md` | the `/state` slash command (write the curated state note) |
 | `eval.mjs` + `eval-cases.json` | recall eval harness + labeled cases |
 | `server.mjs` | MCP server |
 

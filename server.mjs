@@ -3,7 +3,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { openDb, searchChunks, listProjects, BRAIN_DIR } from './store.mjs';
 import { embedOne } from './embed.mjs';
@@ -29,8 +29,11 @@ const server = new McpServer(
       '  "what did we do with the ledger?", "search the brain for…". -> search_context(query).',
       '- BEFORE assuming there is no prior context on a project/decision: call search_context first.',
       '- When starting on an unfamiliar repo, a get_state/search_context gives the ramp-up context.',
+      '- When wrapping up work, or asked to save/update the state: synthesize a concise note',
+      '  (Now / In flight / Decisions / Blockers / Next) and call save_state(content, project).',
       '',
-      'TOOLS: get_state(project?) = curated "where I am today"; if missing, say so and offer to create it.',
+      'TOOLS: get_state(project?) = curated "where I am today"; if missing, offer to create it with save_state.',
+      'save_state(content, project?) = write/refresh that curated note (overwrites; drop reverted decisions).',
       'search_context(query, project?, since?) = searches the WHOLE history. list_projects() = what is indexed and how fresh.',
       '',
       'NAME GOTCHA: the cwd is "dashified" (new_test -> new-test). If get_state finds nothing,',
@@ -77,15 +80,32 @@ server.tool(
 
 server.tool(
   'get_state',
-  'Returns the curated CURRENT state of a project (state/<project>.md), the precise source of "where I am today". USE IT when the user asks "where did I leave off?", "give me the state of X", "what state is X in?", "what do you know about this project?". If it does not exist, say so and offer to create it.',
+  'Returns the curated CURRENT state of a project (state/<project>.md), the precise source of "where I am today". USE IT when the user asks "where did I leave off?", "give me the state of X", "what state is X in?", "what do you know about this project?". If it does not exist, offer to create it with save_state.',
   { project: z.string().optional().describe('project; defaults to the current cwd') },
   async ({ project }) => {
     const p = project || currentProject();
     const file = join(BRAIN_DIR, 'state', `${p}.md`);
     const text = existsSync(file)
       ? readFileSync(file, 'utf8')
-      : `No curated state for "${p}". Create ${file} to set it.`;
+      : `No curated state for "${p}" yet. Use save_state to create it.`;
     return { content: [{ type: 'text', text }] };
+  }
+);
+
+server.tool(
+  'save_state',
+  'Writes/overwrites the curated CURRENT-STATE note for a project (state/<project>.md) — the precise "where I am today" layer that get_state serves. USE IT when the user asks to save/update the state, or at the end of a work session to persist decisions and current status. Pass a concise Markdown note (Now / In flight / Decisions / Blockers / Next). It OVERWRITES the previous note, so include everything still true — that is how reverted decisions get removed instead of resurfacing in search.',
+  {
+    content: z.string().describe('the full state note in Markdown (overwrites the previous one)'),
+    project: z.string().optional().describe('project; defaults to the current cwd'),
+  },
+  async ({ content, project }) => {
+    const p = project || currentProject();
+    const dir = join(BRAIN_DIR, 'state');
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, `${p}.md`);
+    writeFileSync(file, content.endsWith('\n') ? content : content + '\n');
+    return { content: [{ type: 'text', text: `Saved state for "${p}" → ${file} (${content.length} chars).` }] };
   }
 );
 
