@@ -37,9 +37,10 @@ Each line is a JSON object. The fields we rely on:
 | `message.role` | `user` \| `assistant` |
 | `message.content` | **string** on user turns; **array of blocks** on assistant turns |
 
-Assistant content is an array of blocks (`thinking`, `text`, `tool_use`, …). We keep only `text`
-blocks. User content that is an array (tool results) is skipped — that filters out most tool noise
-automatically.
+Assistant content is an array of blocks (`thinking`, `text`, `tool_use`, …). We keep `text` blocks
+and distil `tool_use` blocks into a compact per-session **actions trace** (role `actions`); `thinking`
+is dropped as verbose/low-signal. User content that is an array (tool results) is skipped — that
+filters out most tool noise automatically.
 
 ## Stage 1 — Parse (`transcripts.mjs::parseTranscript`)
 
@@ -52,6 +53,9 @@ Reads the file once and returns `{ turns, title }`. Each turn is normalized to
   latest (most complete) summary per session is retained.
 - **`ai-title`** (Claude Code's auto-generated session title) is surfaced as `title`, stored on the
   `sessions` row, and attached to every search hit so results show which session they came from.
+- **`tool_use`** blocks are distilled into one `role: "actions"` turn per session — a deduped, capped
+  (≤100) trace of `ToolName: <command|file|pattern|url>` lines, so "what did we do" (which files,
+  which commands) is searchable without indexing full, secret-bearing tool inputs.
 
 ## Stage 2 — Redact (`transcripts.mjs::redact`)
 

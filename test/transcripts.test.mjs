@@ -38,21 +38,33 @@ test('projectFromPath strips the dashified user/project prefix', () => {
   assert.equal(projectFromPath(p), 'my-project');
 });
 
-test('parseTranscript: roles, summary tagging, title, noise drop', () => {
+test('parseTranscript: roles, summary tagging, title, noise drop, actions trace', () => {
   const dir = mkdtempSync(join(tmpdir(), 'brain-t-'));
   const f = join(dir, 's.jsonl');
   const lines = [
     { type: 'ai-title', aiTitle: 'my session', sessionId: 'abc' },
     { type: 'user', message: { role: 'user', content: 'hello there, this is a real user turn' }, timestamp: '2026-01-01', sessionId: 'abc' },
     { type: 'user', isCompactSummary: true, message: { role: 'user', content: 'This session is being continued. Summary: things happened.' }, timestamp: '2026-01-02', sessionId: 'abc' },
-    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'an assistant reply' }, { type: 'tool_use', name: 'x' }] } },
+    { type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'thinking', thinking: 'internal reasoning that should be dropped' },
+      { type: 'text', text: 'an assistant reply' },
+      { type: 'tool_use', name: 'Bash', input: { command: 'terraform apply -auto-approve' } },
+      { type: 'tool_use', name: 'Edit', input: { file_path: 'src/auth.ts' } },
+      { type: 'tool_use', name: 'Bash', input: { command: 'terraform apply -auto-approve' } }, // dup
+    ] }, timestamp: '2026-01-03', sessionId: 'abc' },
     { type: 'user', message: { role: 'user', content: '<system-reminder>noise</system-reminder>' } },
   ].map(o => JSON.stringify(o)).join('\n');
   writeFileSync(f, lines);
 
   const { turns, title } = parseTranscript(f);
   assert.equal(title, 'my session');
-  assert.deepEqual(turns.map(t => t.role), ['user', 'summary', 'assistant'], 'noise dropped, summary tagged');
+  assert.deepEqual(turns.map(t => t.role), ['user', 'summary', 'assistant', 'actions'], 'noise + thinking dropped, summary tagged, actions appended');
   assert.ok(turns.find(t => t.role === 'summary').text.includes('Summary'));
+
+  const actions = turns.find(t => t.role === 'actions').text;
+  assert.match(actions, /Bash: terraform apply -auto-approve/);
+  assert.match(actions, /Edit: src\/auth\.ts/);
+  assert.equal(actions.match(/terraform apply/g).length, 1, 'duplicate actions are collapsed');
+  assert.ok(!actions.includes('internal reasoning'), 'thinking is not indexed');
   rmSync(dir, { recursive: true, force: true });
 });
