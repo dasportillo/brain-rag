@@ -1,7 +1,7 @@
 # brain-rag
 
-A local, private **"second brain"** over your Claude Code conversations. It indexes every chat
-transcript on your machine into a searchable vector store and exposes it back to Claude Code as an
+A local, private **"second brain"** over your Claude Code conversations. It indexes the chat
+transcripts you **opt in** into a searchable vector store and exposes it back to Claude Code as an
 MCP server, so any future session can recover the exact context of what you were working on — across
 every project.
 
@@ -18,20 +18,20 @@ raw material already exists — `brain-rag` turns those hundreds of sessions int
 
 ## What it does
 
-- **Ingests** all `~/.claude/projects/**/*.jsonl` transcripts (across all your projects).
+- **Ingests** only the transcripts you **opt in** (from `~/.claude/projects/**/*.jsonl`) — the brain is OFF by default.
 - **Chunks + embeds** the useful turns (user prompts + assistant text) with a local model.
 - **Stores** them in a single on-disk SQLite database with cosine search.
 - **Serves** three tools over MCP so Claude Code can query your history from any project:
   - `search_context({query, project?, k?, since?})` — semantic search over past conversations.
   - `list_projects()` — indexed projects with session/chunk counts and last activity.
   - `get_state({project?})` — curated "current state" note for a project (the precise layer).
-- **Updates incrementally** — a `SessionEnd` hook re-indexes only the session you just closed.
+- **Opt-in by default** — a session is saved only via `claude --brain`, the `/brain` command, or being listed in `keep.list`; a `SessionEnd` hook then incrementally re-indexes the sessions you opted in.
 
 ## Architecture
 
 ```
-~/.claude/projects/**/*.jsonl          (all Claude Code transcripts, all projects)
-        │  ingest.mjs   (walk → parse → redact → chunk → embed → upsert)
+~/.claude/projects/**/*.jsonl          (Claude Code transcripts — only the ones you opt in)
+        │  ingest.mjs   (opt-in filter via keep.list → parse → redact → chunk → embed → upsert)
         ▼
   brain.db  (node:sqlite, embeddings as BLOB, brute-force cosine search)
         ▲
@@ -46,7 +46,7 @@ raw material already exists — `brain-rag` turns those hundreds of sessions int
 
 | Choice | Why |
 |---|---|
-| **Local embeddings** (`Xenova/paraphrase-multilingual-MiniLM-L12-v2`, 384-dim) — not a cloud API | Transcripts contain secrets (JWTs, AWS keys, DB passwords). Local = private, free, offline. Multilingual because the corpus mixes languages (see Evaluation). |
+| **Local embeddings** (`Xenova/multilingual-e5-small`, 384-dim) — not a cloud API | Transcripts contain secrets (JWTs, AWS keys, DB passwords). Local = private, free, offline. Multilingual because the corpus mixes languages (see Evaluation). |
 | **`node:sqlite`** (Node's built-in SQLite) | Zero native compilation. Ships with Node 22.5+. |
 | **Brute-force cosine in JS** — no `pgvector`, no vector DB | At this scale (tens of thousands of chunks) it's sub-100 ms. No server, no Docker to keep running. |
 | **Embedded store, always-on** | A personal brain must answer from any project at any time, even if no daemon is up. |
@@ -76,11 +76,12 @@ cd brain-rag
 ```
 
 `install.sh` will:
-1. `npm install` (embedding model + MCP SDK).
-2. Copy the runtime into `~/.claude/brain/` (the location the MCP server and hook point to).
+1. Copy the runtime into `~/.claude/brain/` and the `/brain` command into `~/.claude/commands/`.
+2. `npm install` (embedding model + MCP SDK).
 3. Register the MCP server globally (`claude mcp add brain --scope user`).
-4. Optionally install the `SessionEnd` auto-update hook.
-5. Run the initial backfill.
+4. Print the **opt-in wiring** to add to `~/.claude/settings.json` (the `SessionStart` mark hook + the `SessionEnd` ingest hook) and the optional `claude --brain` shell wrapper.
+
+The brain is **opt-in**: nothing is indexed until you opt a session in, so there is no bulk backfill.
 
 > The runtime lives at `~/.claude/brain/`; this repo is the source of truth. Re-run `./install.sh`
 > after pulling changes.
@@ -163,15 +164,17 @@ remaining misses need smaller chunks for very long multi-topic reports (a re-emb
 diminishing returns. `eval-bundle.json` / `verdicts.json` are gitignored (they contain transcript
 text).
 
-## How updating works (incremental)
+## How updating works (opt-in + incremental)
 
-Each session is one `.jsonl` file. The `sessions` table stores its `(mtime, bytes)`. On every run,
-`ingest.mjs` re-indexes **only** files that are new or have grown (active sessions); everything else
-is skipped:
+The brain is **opt-in**: `ingest.mjs` only considers transcripts listed in `keep.list`. You add a
+session to it by starting with `claude --brain` (the `mark-keep.mjs` `SessionStart` hook) or by
+running `/brain` mid-conversation (`mark-current-keep.mjs`).
+
+Among opted-in sessions it is **incremental**: each session is one `.jsonl` file and the `sessions`
+table stores its `(mtime, bytes)`, so on every run only new or grown files are re-indexed:
 
 ```
-1st run:  479 processed, 0 skipped        ← indexes everything
-2nd run:    1 processed, 478 skipped      ← the live session grew; only it was re-indexed
+run:  1 processed, N skipped      ← only the opted-in session that grew was re-indexed
 ```
 
 The `SessionEnd` hook fires this automatically (detached, non-blocking) when you close a session, so
@@ -192,7 +195,7 @@ the brain stays current with no manual step.
 |---|---|---|
 | `BRAIN_DIR` | `~/.claude/brain` | where the DB and `state/` live |
 | `BRAIN_DB` | `$BRAIN_DIR/brain.db` | SQLite path |
-| `BRAIN_MODEL` | `Xenova/paraphrase-multilingual-MiniLM-L12-v2` | local embedding model |
+| `BRAIN_MODEL` | `Xenova/multilingual-e5-small` | local embedding model |
 
 ## Roadmap
 
@@ -209,8 +212,11 @@ the brain stays current with no manual step.
 | `transcripts.mjs` | parse `.jsonl`, chunk, redact secrets |
 | `embed.mjs` | local embeddings (transformers.js) |
 | `store.mjs` | `node:sqlite` schema, cosine search, stats |
-| `ingest.mjs` | incremental ingestion CLI |
+| `ingest.mjs` | opt-in + incremental ingestion CLI |
 | `search.mjs` | CLI search |
+| `mark-keep.mjs` | `SessionStart` opt-in hook (`BRAIN=1` → `keep.list`) |
+| `mark-current-keep.mjs` | `/brain` backend — opt the current session in |
+| `commands/brain.md` | the `/brain` slash command |
 | `eval.mjs` + `eval-cases.json` | recall eval harness + labeled cases |
 | `server.mjs` | MCP server |
 

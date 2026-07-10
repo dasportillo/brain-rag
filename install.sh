@@ -12,15 +12,19 @@ echo "  runtime: $BRAIN_DIR"
 
 # 1. Deploy the runtime source (code only — never the DB, logs or node_modules).
 mkdir -p "$BRAIN_DIR"
-cp "$REPO_DIR"/{transcripts,store,embed,ingest,search,server}.mjs "$BRAIN_DIR"/
+cp "$REPO_DIR"/{transcripts,store,embed,ingest,search,server,mark-current-keep,mark-keep}.mjs "$BRAIN_DIR"/
 cp "$REPO_DIR"/package.json "$BRAIN_DIR"/
 [ -f "$REPO_DIR/package-lock.json" ] && cp "$REPO_DIR/package-lock.json" "$BRAIN_DIR"/
 
-# 2. Dependencies (embedding model + MCP SDK).
+# 2. Deploy the /brain slash command (opt the current session in mid-conversation).
+mkdir -p "$HOME/.claude/commands"
+cp "$REPO_DIR/commands/brain.md" "$HOME/.claude/commands/brain.md"
+
+# 3. Dependencies (embedding model + MCP SDK).
 echo "▸ npm install"
 ( cd "$BRAIN_DIR" && npm install --no-audit --no-fund )
 
-# 3. Register the MCP server globally (skip if already present).
+# 4. Register the MCP server globally (skip if already present).
 if claude mcp list 2>/dev/null | grep -q '^brain\b'; then
   echo "▸ MCP server 'brain' already registered — skipping"
 else
@@ -28,24 +32,39 @@ else
   claude mcp add brain --scope user -- node "$BRAIN_DIR/server.mjs"
 fi
 
-# 4. Auto-update hook (manual step — we print it rather than edit settings.json for you).
+# 5. Opt-in wiring (manual step — we print it rather than edit settings.json for you).
+#    The brain is OFF by default: a session is indexed ONLY if you opt it in.
 cat <<EOF
 
-▸ OPTIONAL — auto-update on session close
-  Add this second entry to "SessionEnd" in ~/.claude/settings.json (keep any existing entries):
+▸ OPT-IN wiring — the brain saves NOTHING unless you opt a session in.
 
-  {
-    "matcher": "",
-    "hooks": [{
-      "type": "command",
-      "command": "nohup node \"$BRAIN_DIR/ingest.mjs\" >> \"$BRAIN_DIR/ingest.log\" 2>&1 &",
-      "timeout": 20
-    }]
-  }
+  a) Add these two entries to ~/.claude/settings.json (keep any existing entries):
+
+     "SessionStart": [{
+       "matcher": "",
+       "hooks": [{ "type": "command",
+         "command": "node \"$BRAIN_DIR/mark-keep.mjs\"", "timeout": 5 }]
+     }]
+
+     "SessionEnd": [{
+       "matcher": "",
+       "hooks": [{ "type": "command",
+         "command": "nohup node \"$BRAIN_DIR/ingest.mjs\" >> \"$BRAIN_DIR/ingest.log\" 2>&1 &",
+         "timeout": 20 }]
+     }]
+
+     SessionStart + BRAIN=1 marks the whole session to be saved; SessionEnd indexes
+     only the marked (opted-in) sessions, incrementally.
+
+  b) Optional shell wrapper — start an opted-in session with 'claude --brain':
+
+     claude() {
+       local brain=0 args=()
+       for a in "\$@"; do case "\$a" in --brain) brain=1 ;; *) args+=("\$a") ;; esac; done
+       if (( brain )); then BRAIN=1 command claude "\${args[@]}"; else command claude "\${args[@]}"; fi
+     }
+
+  c) Mid-session, run /brain to opt the CURRENT conversation in.
 EOF
 
-# 5. Initial backfill.
-echo "▸ running initial backfill (first run downloads the embedding model)…"
-( cd "$BRAIN_DIR" && node ingest.mjs )
-
-echo "✔ done. Try: node \"$BRAIN_DIR/search.mjs\" \"what am I working on\""
+echo "✔ done. Opt a session in (claude --brain or /brain), then: node \"$BRAIN_DIR/search.mjs\" \"what am I working on\""

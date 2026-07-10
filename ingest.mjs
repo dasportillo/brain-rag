@@ -1,4 +1,4 @@
-// INCREMENTAL ingestion of every transcript on the machine into the store.
+// INCREMENTAL ingestion of OPTED-IN transcripts into the store (opt-in via keep.list).
 //
 // How it updates (the key part):
 //   - Each session = one .jsonl file. We store its (mtime, bytes) in the `sessions` table.
@@ -12,13 +12,24 @@
 //   node ingest.mjs --no-embed    # only parse/chunk/store (fast, no model)
 //   node ingest.mjs --limit 5     # process up to 5 sessions (for testing)
 //   node ingest.mjs --stats       # print index status and exit
-import { readdirSync, statSync } from 'node:fs';
+import { readdirSync, statSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { openDb, vecToBlob, stats } from './store.mjs';
 import { parseTurns, projectFromPath, chunkText, redact } from './transcripts.mjs';
 
 const PROJECTS = join(homedir(), '.claude', 'projects');
+
+// OPT-IN: by default NOTHING is indexed. Only sessions whose transcript is listed in
+// keep.list get indexed. Entries are added by `BRAIN=1 claude` (the mark-keep.mjs
+// SessionStart hook) or by the /brain slash command mid-session (mark-current-keep.mjs).
+const KEEP_FILE = join(homedir(), '.claude', 'brain', 'keep.list');
+const KEPT = new Set(
+  existsSync(KEEP_FILE)
+    ? readFileSync(KEEP_FILE, 'utf8').split('\n').map(s => s.trim()).filter(Boolean)
+    : []
+);
+
 const args = process.argv.slice(2);
 const has = (f) => args.includes(f);
 const val = (f, d) => (has(f) ? args[args.indexOf(f) + 1] : d);
@@ -61,6 +72,7 @@ let processed = 0, skipped = 0, totalChunks = 0;
 
 for (const file of files) {
   if (processed >= LIMIT) break;
+  if (!KEPT.has(file)) { skipped++; continue; } // opt-in: only index what is marked in keep.list
   const st = statSync(file);
   const mtime = Math.floor(st.mtimeMs);
   const prev = getSession.get(file);
