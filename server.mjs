@@ -3,8 +3,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { openDb, searchChunks, listProjects, BRAIN_DIR } from './store.mjs';
 import { embedOne } from './embed.mjs';
 
@@ -15,7 +16,7 @@ const db = openDb();
 const clip = (t, n) => (t && t.length > n) ? t.slice(0, n).trimEnd() + ` … [+${t.length - n} chars]` : t;
 
 const server = new McpServer(
-  { name: 'brain', version: '0.1.0' },
+  { name: 'brain', version: '0.1.1' },
   {
     instructions: [
       "This server is the user's \"second brain\": persistent memory of all their work",
@@ -31,9 +32,13 @@ const server = new McpServer(
       '- When starting on an unfamiliar repo, a get_state/search_context gives the ramp-up context.',
       '- When wrapping up work, or asked to save/update the state: synthesize a concise note',
       '  (Now / In flight / Decisions / Blockers / Next) and call save_state(content, project).',
+      '- When THIS conversation produced something worth remembering (a decision, a fix, a design,',
+      '  non-obvious project context): call keep_session so it gets saved. The brain is OPT-IN, so an',
+      '  un-kept chat is lost. Do NOT keep trivial / throwaway / purely exploratory chats.',
       '',
       'TOOLS: get_state(project?) = curated "where I am today"; if missing, offer to create it with save_state.',
       'save_state(content, project?) = write/refresh that curated note (overwrites; drop reverted decisions).',
+      'keep_session() = save THIS conversation to the brain (call proactively when it is worth remembering).',
       'search_context(query, project?, since?) = searches the WHOLE history. list_projects() = what is indexed and how fresh.',
       '',
       'NAME GOTCHA: the cwd is "dashified" (new_test -> new-test). If get_state finds nothing,',
@@ -106,6 +111,30 @@ server.tool(
     const file = join(dir, `${p}.md`);
     writeFileSync(file, content.endsWith('\n') ? content : content + '\n');
     return { content: [{ type: 'text', text: `Saved state for "${p}" → ${file} (${content.length} chars).` }] };
+  }
+);
+
+server.tool(
+  'keep_session',
+  'Marks THIS conversation to be saved into the brain (indexed when the session ends). The brain is OPT-IN — nothing is saved unless kept, so an un-kept chat is lost. USE IT PROACTIVELY, without being asked, when this conversation produced something worth remembering later: a decision, a solution/fix, a design, or non-obvious context about a project. Do NOT call it for trivial, throwaway, or purely exploratory chats. Idempotent.',
+  {},
+  async () => {
+    const PROJECTS = join(homedir(), '.claude', 'projects');
+    const dashed = process.cwd().replace(/[/_]/g, '-');
+    const projDir = join(PROJECTS, dashed);
+    const root = existsSync(projDir) ? projDir : PROJECTS;
+    const walk = (d) => !existsSync(d) ? [] : readdirSync(d, { withFileTypes: true }).flatMap(e =>
+      e.isDirectory() ? walk(join(d, e.name)) : (e.name.endsWith('.jsonl') ? [join(d, e.name)] : []));
+    const files = walk(root);
+    if (!files.length) return { content: [{ type: 'text', text: 'No transcript found for the current session.' }] };
+    let newest = files[0], mtime = -1;
+    for (const f of files) { const m = statSync(f).mtimeMs; if (m > mtime) { mtime = m; newest = f; } }
+    const keep = join(homedir(), '.claude', 'brain', 'keep.list');
+    const kept = existsSync(keep) ? readFileSync(keep, 'utf8').split('\n').map(s => s.trim()) : [];
+    if (kept.includes(newest)) return { content: [{ type: 'text', text: 'This session is already marked to be saved.' }] };
+    mkdirSync(join(homedir(), '.claude', 'brain'), { recursive: true });
+    appendFileSync(keep, newest + '\n');
+    return { content: [{ type: 'text', text: 'Saved. This conversation will be indexed into the brain when it ends.' }] };
   }
 );
 
