@@ -37,6 +37,8 @@ export function openDb() {
     CREATE INDEX IF NOT EXISTS idx_chunks_path    ON chunks(path);
     CREATE INDEX IF NOT EXISTS idx_chunks_project ON chunks(project);
   `);
+  // migration: per-session title (Claude Code's ai-title). Ignore if the column already exists.
+  try { db.exec('ALTER TABLE sessions ADD COLUMN title TEXT'); } catch { /* already present */ }
   return db;
 }
 
@@ -85,12 +87,13 @@ export function searchChunks(db, qvec, { project = null, k = 8, since = null, re
       idf[t] = Math.log(1 + N / (df + 1));
     }
     for (const c of cand) c.lex = terms.reduce((s, t) => s + (c.lc.includes(t) ? idf[t] : 0), 0);
-    // RRF: fuses the vector ranking and the lexical ranking (robust, no scale normalization)
-    const byVec = [...cand].sort((a, b) => b.sim - a.sim);
-    const byLex = cand.filter(c => c.lex > 0).sort((a, b) => b.lex - a.lex);
-    const RRF = 60, rrf = new Map();
-    byVec.forEach((c, idx) => rrf.set(c.i, (rrf.get(c.i) || 0) + 1 / (RRF + idx + 1)));
-    byLex.forEach((c, idx) => rrf.set(c.i, (rrf.get(c.i) || 0) + 1 / (RRF + idx + 1)));
+    // RRF: fuses vector + lexical (+ a gentle recency signal), robust with no scale normalization.
+    const RRF = 60, REC_W = 0.5, rrf = new Map();
+    const fuse = (list, w = 1) => list.forEach((c, idx) => rrf.set(c.i, (rrf.get(c.i) || 0) + w / (RRF + idx + 1)));
+    fuse([...cand].sort((a, b) => b.sim - a.sim));                      // vector ranking
+    fuse(cand.filter(c => c.lex > 0).sort((a, b) => b.lex - a.lex));    // lexical ranking
+    // recency as a third signal (half weight ⇒ worth at most ~half a vector rank; never dominates)
+    if (recencyBoost) fuse(cand.filter(c => c.r.ts).sort((a, b) => Date.parse(b.r.ts) - Date.parse(a.r.ts)), REC_W);
     scored = cand.map(c => ({ project: c.r.project, session: c.r.session, ts: c.r.ts, role: c.r.role, text: c.r.text, score: rrf.get(c.i) || 0, sim: c.sim }));
   } else {
     scored = cand.map(c => ({ project: c.r.project, session: c.r.session, ts: c.r.ts, role: c.r.role, text: c.r.text, score: c.sim + recency(c.r.ts), sim: c.sim }));
@@ -105,6 +108,12 @@ export function searchChunks(db, qvec, { project = null, k = 8, since = null, re
     seen.add(key);
     out.push(s);
     if (out.length >= k) break;
+  }
+  // attach the session title (ai-title) to each hit — cheap, only for the k results.
+  const titleQ = db.prepare('SELECT title FROM sessions WHERE session = ? AND title IS NOT NULL LIMIT 1');
+  for (const s of out) {
+    const row = s.session ? titleQ.get(s.session) : null;
+    if (row?.title) s.title = row.title;
   }
   return out;
 }

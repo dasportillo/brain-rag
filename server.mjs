@@ -9,6 +9,11 @@ import { openDb, searchChunks, listProjects, BRAIN_DIR } from './store.mjs';
 import { embedOne } from './embed.mjs';
 
 const db = openDb();
+
+// Cap per-hit text so a long chunk (e.g. a whole compaction summary) doesn't flood the model's
+// context. Summaries get a larger budget since they are the coherent recap.
+const clip = (t, n) => (t && t.length > n) ? t.slice(0, n).trimEnd() + ` … [+${t.length - n} chars]` : t;
+
 const server = new McpServer(
   { name: 'brain', version: '0.1.0' },
   {
@@ -53,7 +58,7 @@ server.tool(
     const qvec = await embedOne(query);
     const hits = searchChunks(db, qvec, { project: project ?? null, k, since: since ?? null, queryText: query });
     const text = hits.length
-      ? hits.map(h => `### ${h.project} · ${h.ts?.slice(0, 10) ?? '?'} · ${h.role} (score ${h.score.toFixed(3)})\n${h.text}`).join('\n\n')
+      ? hits.map(h => `### ${h.project} · ${h.ts?.slice(0, 10) ?? '?'} · ${h.role}${h.title ? ` · "${h.title}"` : ''} (score ${h.score.toFixed(3)})\n${clip(h.text, h.role === 'summary' ? 2000 : 1200)}`).join('\n\n')
       : 'No results.';
     return { content: [{ type: 'text', text }] };
   }

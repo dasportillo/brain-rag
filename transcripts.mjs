@@ -23,23 +23,37 @@ export function redact(text) {
   return text
     .replace(/eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, '[JWT_REDACTED]')
     .replace(/AKIA[0-9A-Z]{16}/g, '[AWS_KEY_REDACTED]')
+    .replace(/AIza[0-9A-Za-z_-]{35}/g, '[GOOGLE_KEY_REDACTED]')
+    .replace(/sk-(?:proj-|ant-)?[A-Za-z0-9]{20,}/g, '[API_KEY_REDACTED]')       // OpenAI / Anthropic-style
     .replace(/xox[baprs]-[0-9A-Za-z-]{10,}/g, '[SLACK_TOKEN_REDACTED]')
+    .replace(/gh[opsur]_[A-Za-z0-9]{30,}/g, '[GH_TOKEN_REDACTED]')              // ghp_/gho_/ghu_/ghs_/ghr_
     .replace(/-----BEGIN[^-]+PRIVATE KEY-----[\s\S]*?-----END[^-]+PRIVATE KEY-----/g, '[PRIVATE_KEY_REDACTED]')
-    .replace(/ghp_[A-Za-z0-9]{30,}/g, '[GH_TOKEN_REDACTED]');
+    .replace(/(:\/\/[^:@\s/]+:)[^@\s/]{3,}@/g, '$1[SECRET_REDACTED]@')          // password in a URL (user:pass@host)
+    .replace(/(password|passwd|secret|token|api[_-]?key|access[_-]?key)\b(["'\s]*[:=]["'\s]*)[^\s"'`]{6,}/gi, '$1$2[SECRET_REDACTED]'); // KEY=value / KEY: value (also DB_PASSWORD=…)
 }
 
-// Yields the useful turns (user text + assistant text blocks), dropping noise.
-export function* parseTurns(filePath) {
+// Reads a transcript once and returns { turns, title }:
+//   turns  — the useful turns (user + assistant text), plus context-compaction summaries
+//            tagged role 'summary' (they are system-written recaps, not the user's words).
+//   title  — the session's ai-title ("what this session was about"), or null.
+// Noise (command wrappers, harness reminders) is dropped.
+export function parseTranscript(filePath) {
   const content = readFileSync(filePath, 'utf8');
+  const turns = [];
+  let title = null;
   for (const line of content.split('\n')) {
     if (!line.trim()) continue;
     let obj;
     try { obj = JSON.parse(line); } catch { continue; }
 
-    if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
+    if (obj.type === 'ai-title' && obj.aiTitle) {
+      title = obj.aiTitle.trim() || title; // keep the latest title in the file
+    } else if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
       const text = obj.message.content.trim();
       if (!text || isNoise(text)) continue;
-      yield { role: 'user', text, ts: obj.timestamp ?? null, session: obj.sessionId ?? null };
+      // A compaction summary is a system-written recap, not the user's words: tag it 'summary'.
+      const role = obj.isCompactSummary ? 'summary' : 'user';
+      turns.push({ role, text, ts: obj.timestamp ?? null, session: obj.sessionId ?? null });
     } else if (obj.type === 'assistant' && obj.message && Array.isArray(obj.message.content)) {
       const text = obj.message.content
         .filter(b => b && b.type === 'text' && b.text)
@@ -47,9 +61,10 @@ export function* parseTurns(filePath) {
         .join('\n')
         .trim();
       if (!text) continue;
-      yield { role: 'assistant', text, ts: obj.timestamp ?? null, session: obj.sessionId ?? null };
+      turns.push({ role: 'assistant', text, ts: obj.timestamp ?? null, session: obj.sessionId ?? null });
     }
   }
+  return { turns, title };
 }
 
 // Splits a long text into ~size-char windows with overlap.

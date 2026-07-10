@@ -19,7 +19,7 @@ raw material already exists — `brain-rag` turns those hundreds of sessions int
 ## What it does
 
 - **Ingests** only the transcripts you **opt in** (from `~/.claude/projects/**/*.jsonl`) — the brain is OFF by default.
-- **Chunks + embeds** the useful turns (user prompts + assistant text) with a local model.
+- **Chunks + embeds** the useful turns (user prompts + assistant text) with a local model; context-compaction **summaries** are kept whole (tagged `summary`) and each session's **title** is attached to every hit.
 - **Stores** them in a single on-disk SQLite database with cosine search.
 - **Serves** three tools over MCP so Claude Code can query your history from any project:
   - `search_context({query, project?, k?, since?})` — semantic search over past conversations.
