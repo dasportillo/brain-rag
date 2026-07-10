@@ -14,6 +14,7 @@
     "store.mjs",
     "embed.mjs",
     "ingest.mjs",
+    "import.mjs",
     "transcripts.mjs",
     "search.mjs",
     "state.mjs",

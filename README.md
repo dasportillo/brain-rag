@@ -86,7 +86,17 @@ Just the search side (no ingestion/hooks) — point Claude Code straight at the 
 claude mcp add brain --scope user -- npx -y brain-rag serve
 ```
 
-The `brain-rag` CLI also exposes `ingest`, `search`, `stats`, and `state` (`brain-rag help`).
+The `brain-rag` CLI also exposes `import` (backfill past conversations), `ingest`, `search`, `stats`,
+and `state` (`brain-rag help`).
+
+**Import your existing conversations.** The brain is opt-in, so past chats aren't indexed until you
+bring them in:
+
+```bash
+brain-rag import           # all previous conversations
+brain-rag import myproj    # only projects matching "myproj"
+brain-rag import --dry     # preview — writes nothing, embeds nothing
+```
 
 To uninstall: `npx -y brain-rag uninstall` (unregisters the MCP + removes the slash commands; add
 `--purge` to also delete the index and state notes).
