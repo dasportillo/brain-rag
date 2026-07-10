@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { openDb, searchChunks, listProjects, BRAIN_DIR } from './store.mjs';
+import { openDb, searchChunks, listProjects, canonicalProject, BRAIN_DIR } from './store.mjs';
 import { embedOne } from './embed.mjs';
 
 const db = openDb();
@@ -65,8 +65,12 @@ server.tool(
   async ({ query, project, k = 8, since }) => {
     const qvec = await embedOne(query);
     const hits = searchChunks(db, qvec, { project: project ?? null, k, since: since ?? null, queryText: query });
+    // Temporal-version signal: warn when a hit has a newer near-duplicate, or mark the latest of a set.
+    const versionNote = (h) => h.outdatedBy
+      ? ` · ⚠️ SUPERSEDED — newer related entry on ${h.outdatedBy}`
+      : (h.supersedes?.length ? ` · ✅ latest of ${new Set(h.supersedes).size + 1} versions (older: ${[...new Set(h.supersedes)].join(', ')})` : '');
     const text = hits.length
-      ? hits.map(h => `### ${h.project} · ${h.ts?.slice(0, 10) ?? '?'} · ${h.role}${h.title ? ` · "${h.title}"` : ''} (score ${h.score.toFixed(3)})\n${clip(h.text, h.role === 'summary' ? 2000 : 1200)}`).join('\n\n')
+      ? hits.map(h => `### ${h.project} · ${h.ts?.slice(0, 10) ?? '?'} · ${h.role}${h.title ? ` · "${h.title}"` : ''} (score ${h.score.toFixed(3)})${versionNote(h)}\n${clip(h.text, h.role === 'summary' ? 2000 : 1200)}`).join('\n\n')
       : 'No results.';
     return { content: [{ type: 'text', text }] };
   }
@@ -88,7 +92,7 @@ server.tool(
   'Returns the curated CURRENT state of a project (state/<project>.md), the precise source of "where I am today". USE IT when the user asks "where did I leave off?", "give me the state of X", "what state is X in?", "what do you know about this project?". If it does not exist, offer to create it with save_state.',
   { project: z.string().optional().describe('project; defaults to the current cwd') },
   async ({ project }) => {
-    const p = project || currentProject();
+    const p = canonicalProject(project || currentProject());
     const file = join(BRAIN_DIR, 'state', `${p}.md`);
     const text = existsSync(file)
       ? readFileSync(file, 'utf8')
@@ -105,7 +109,7 @@ server.tool(
     project: z.string().optional().describe('project; defaults to the current cwd'),
   },
   async ({ content, project }) => {
-    const p = project || currentProject();
+    const p = canonicalProject(project || currentProject());
     const dir = join(BRAIN_DIR, 'state');
     mkdirSync(dir, { recursive: true });
     const file = join(dir, `${p}.md`);

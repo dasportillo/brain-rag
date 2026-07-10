@@ -137,6 +137,20 @@ node ingest.mjs --stats
 node eval.mjs        # run the recall eval (see Evaluation)
 ```
 
+### Temporal version signal in search
+
+Search preserves **recall** — nothing is dropped — but a raw list of hits can't tell you *"is this
+the current version of the plan, or an old draft?"*. So after ranking, `search_context` (and
+`search.mjs`) compare the returned results pairwise: when two hits are near-duplicate in **topic**
+(embedding cosine ≥ **0.92**) but carry **different dates**, they're the same thing at two points in
+time, and the results are annotated accordingly:
+
+- the older hit is marked **⚠️ SUPERSEDED**, pointing at the newer date;
+- the newest hit is marked **✅ latest of N versions**, listing the older dates it supersedes.
+
+This is a **signal only** — every version stays in the results — so you can distinguish the live
+version of a decision from an earlier revision without losing the history that led to it.
+
 ### Current state layer (`get_state` / `save_state`)
 
 `get_state` serves a curated `state/<project>.md` — the precise "where am I parked today" note that
@@ -152,6 +166,30 @@ node state.mjs my-notes        # dump a project's recent material (what /state f
 `/state [project]` then writes `state/<project>.md` (Now / In flight / Decisions / Blockers / Next).
 Overwriting is deliberate: it removes stale/reverted decisions instead of letting them resurface. The
 notes are gitignored — they contain your work details.
+
+### Project aliases (`aliases.json`)
+
+The same project's work often ends up fragmented across several indexed names — a workspace path
+(`efy3`) versus its per-service subfolders (`efy3-efy-experience`, `efy3-efy3-users`). An **optional**
+`~/.claude/brain/aliases.json` (see [`aliases.example.json`](aliases.example.json)) merges those
+fragments into one **canonical** project:
+
+```json
+{ "efy3": ["efy3-efy-experience", "efy3-efy3-users", "efy3-efy-transactions"] }
+```
+
+Each key is the canonical name; its array lists the raw names (as shown by `list_projects` /
+`brain-rag list`) that fold into it. With this in place:
+
+- **`list_projects`** collapses the fragments into a single row (summed counts, newest activity);
+- **search filtering** — a `--project` / `project` filter on the canonical name matches **all**
+  members, so one query spans every fragment;
+- **`get_state` / `save_state`** read and write a single `state/<canonical>.md`.
+
+An **absent or malformed** file means identity — zero behavior change, so it's safe to skip. One
+caveat: don't merge in a project whose sessions are actually off-topic (e.g. a tool built inside
+another repo's workspace) — that folds unrelated chatter into the canonical project and
+re-introduces the contamination search-time de-dup was added to remove.
 
 ## Evaluation
 
@@ -255,6 +293,7 @@ the brain stays current with no manual step.
 | `commands/brain.md` | the `/brain` slash command (opt a session in) |
 | `commands/state.md` | the `/state` slash command (write the curated state note) |
 | `eval.mjs` + `eval-cases.json` | recall eval harness + labeled cases |
+| `aliases.example.json` | template for `~/.claude/brain/aliases.json` (merge fragmented projects) |
 | `server.mjs` | MCP server |
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the deep dive.
