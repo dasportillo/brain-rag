@@ -1,9 +1,29 @@
 {
-  "name": "brain",
+  "name": "@dasportillo/brain-rag",
   "version": "0.1.0",
-  "description": "Global RAG second brain over your Claude Code transcripts",
+  "description": "Local, private RAG second brain over your Claude Code transcripts, served back to Claude Code as an MCP server.",
   "type": "module",
-  "private": true,
+  "bin": {
+    "brain-rag": "./cli.mjs"
+  },
+  "files": [
+    "cli.mjs",
+    "install.mjs",
+    "server.mjs",
+    "store.mjs",
+    "embed.mjs",
+    "ingest.mjs",
+    "transcripts.mjs",
+    "search.mjs",
+    "state.mjs",
+    "mark-keep.mjs",
+    "mark-current-keep.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.5"
+  },
   "scripts": {
     "ingest": "node ingest.mjs",
     "search": "node search.mjs",
@@ -11,6 +31,19 @@
     "serve": "node server.mjs",
     "test": "node --test"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dasportillo/brain-rag.git"
+  },
+  "keywords": [
+    "mcp",
+    "claude-code",
+    "rag",
+    "second-brain",
+    "embeddings",
+    "transformers.js"
+  ],
+  "license": "MIT",
   "dependencies": {
     "@huggingface/transformers": "^3.3.0",
     "@modelcontextprotocol/sdk": "^1.12.0",
