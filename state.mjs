@@ -6,7 +6,7 @@
 //
 // Prints the most recent chunks for the project in chronological order (oldest→newest), deduped.
 // An LLM turns this into a concise state note; get_state then serves that note verbatim.
-import { openDb, listProjects } from './store.mjs';
+import { openDb, listProjects, aliasMembers } from './store.mjs';
 
 const args = process.argv.slice(2);
 const valOf = (f, d) => (args.includes(f) ? args[args.indexOf(f) + 1] : d);
@@ -34,9 +34,11 @@ if (!exact) {
   else { console.error(`no activity for "${project}"`); process.exit(1); }
 }
 
+// pull across every alias member so a canonical project's state is synthesized from all its fragments
+const members = aliasMembers(proj);
 const rows = db.prepare(
-  'SELECT ts, role, text FROM chunks WHERE project = ? AND ts >= ? ORDER BY ts DESC LIMIT ?'
-).all(proj, cutoff, limit);
+  `SELECT ts, role, text FROM chunks WHERE project IN (${members.map(() => '?').join(',')}) AND ts >= ? ORDER BY ts DESC LIMIT ?`
+).all(...members, cutoff, limit);
 
 // dedup + chronological
 const seen = new Set();
