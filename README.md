@@ -174,8 +174,8 @@ A project is named by its **git repo** (the repo the session's cwd lives in), so
 project no matter which subdirectory Claude was launched in. That removes most fragmentation on its
 own. What it deliberately does *not* do is merge **separate repos** that you think of as one product
 (e.g. an `efy3` workspace of 15 independent service repos) — no heuristic gets that right for
-everyone, so it's left as opt-in. An **optional** `~/.claude/brain/aliases.json` (see
-[`aliases.example.json`](aliases.example.json)) merges those repos into one **canonical** project:
+everyone, so it's left as opt-in. An **optional** `~/.claude/brain/aliases.json`
+merges those repos into one **canonical** project:
 
 ```json
 { "efy3": ["efy3-users", "efy3-bff", "ledger-core", "efy-transactions"] }
@@ -296,7 +296,6 @@ the brain stays current with no manual step.
 | `commands/brain.md` | the `/brain` slash command (opt a session in) |
 | `commands/state.md` | the `/state` slash command (write the curated state note) |
 | `eval.mjs` + `eval-cases.json` | recall eval harness + labeled cases |
-| `aliases.example.json` | template for `~/.claude/brain/aliases.json` (merge fragmented projects) |
 | `server.mjs` | MCP server |
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the deep dive.

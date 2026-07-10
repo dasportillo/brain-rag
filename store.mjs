@@ -14,7 +14,7 @@ const DB_PATH = process.env.BRAIN_DB || join(BRAIN_DIR, 'brain.db');
 // PROJECT ALIASES (optional): merge fragmented project names into one canonical project so
 // list_projects / search / get_state treat e.g. efy3, efy3-efy-experience, efy3-efy3-users as ONE.
 // Format of ~/.claude/brain/aliases.json:  { "<canonical>": ["<memberFragment>", ...] }
-// Absent or malformed file => identity mapping (zero behavior change). See aliases.example.json.
+// Absent or malformed file => identity mapping (zero behavior change).
 const ALIAS_PATH = process.env.BRAIN_ALIASES || join(BRAIN_DIR, 'aliases.json');
 let ALIASES = {};
 try { if (existsSync(ALIAS_PATH)) ALIASES = JSON.parse(readFileSync(ALIAS_PATH, 'utf8')); }
