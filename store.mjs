@@ -159,6 +159,19 @@ export function searchChunks(db, qvec, { project = null, k = 8, since = null, re
       if (!newer.supersedes.includes(od)) newer.supersedes.push(od); // dedup: two older chunks can share a date
     }
   }
+  // CROSS-PROJECT FACET: when the hits span several projects, announce it up front — the same
+  // term can match DIFFERENT topics per project (e.g. a financial event audit-log vs
+  // medical-claims "auditoría") and an inline blend goes unnoticed. Counts only, no "distant
+  // topic" detection: measured on the live corpus, centroid AND query-residual similarities
+  // between false-friend project pairs (0.78–0.83) overlap same-product pairs (0.68–0.84), so
+  // no threshold separates them with these embeddings. Signal only — ranking/recall untouched.
+  if (out.length > 1) {
+    const counts = new Map();
+    for (const s of out) counts.set(s.project, (counts.get(s.project) || 0) + 1);
+    if (counts.size > 1) {
+      out.facet = [...counts].map(([project, n]) => ({ project, n })).sort((a, b) => b.n - a.n);
+    }
+  }
   // attach the session title (ai-title) to each hit — cheap, only for the k results.
   const titleQ = db.prepare('SELECT title FROM sessions WHERE session = ? AND title IS NOT NULL LIMIT 1');
   for (const s of out) {
@@ -200,6 +213,22 @@ export function listProjects(db) {
     merged.set(canon, cur);
   }
   return [...merged.values()].sort((a, b) => (b.last_activity || '').localeCompare(a.last_activity || ''));
+}
+
+// Most recent chunks for a project (all alias members), deduped, oldest→newest. The raw material
+// for a state note — used by state.mjs (CLI) and as get_state's fallback when no curated note exists.
+export function recentActivity(db, project, { days = 30, limit = 40 } = {}) {
+  const members = aliasMembers(project);
+  if (!members.length) return [];
+  const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+  const rows = db.prepare(
+    `SELECT ts, role, text FROM chunks WHERE project IN (${members.map(() => '?').join(',')}) AND ts >= ? ORDER BY ts DESC LIMIT ?`
+  ).all(...members, cutoff, limit);
+  const seen = new Set();
+  return rows.filter(r => {
+    const k = r.text.replace(/\s+/g, ' ').trim().slice(0, 120);
+    if (seen.has(k)) return false; seen.add(k); return true;
+  }).reverse();
 }
 
 export function stats(db) {

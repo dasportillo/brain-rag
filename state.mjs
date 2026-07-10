@@ -6,7 +6,7 @@
 //
 // Prints the most recent chunks for the project in chronological order (oldest→newest), deduped.
 // An LLM turns this into a concise state note; get_state then serves that note verbatim.
-import { openDb, listProjects, aliasMembers } from './store.mjs';
+import { openDb, listProjects, recentActivity } from './store.mjs';
 
 const args = process.argv.slice(2);
 const valOf = (f, d) => (args.includes(f) ? args[args.indexOf(f) + 1] : d);
@@ -22,7 +22,6 @@ if (args.includes('--list') || args.length === 0) {
 const project = args[0];
 const limit = Number(valOf('--limit', 80));
 const days = Number(valOf('--days', 30));
-const cutoff = new Date(Date.now() - days * 86400000).toISOString();
 
 // resolve project name (exact, else unique LIKE match)
 let proj = project;
@@ -35,17 +34,7 @@ if (!exact) {
 }
 
 // pull across every alias member so a canonical project's state is synthesized from all its fragments
-const members = aliasMembers(proj);
-const rows = db.prepare(
-  `SELECT ts, role, text FROM chunks WHERE project IN (${members.map(() => '?').join(',')}) AND ts >= ? ORDER BY ts DESC LIMIT ?`
-).all(...members, cutoff, limit);
-
-// dedup + chronological
-const seen = new Set();
-const chron = rows.filter(r => {
-  const k = r.text.replace(/\s+/g, ' ').trim().slice(0, 120);
-  if (seen.has(k)) return false; seen.add(k); return true;
-}).reverse();
+const chron = recentActivity(db, proj, { days, limit });
 
 console.log(`# Recent activity — ${proj}  (last ${days}d, ${chron.length} snippets)\n`);
 for (const r of chron) {
