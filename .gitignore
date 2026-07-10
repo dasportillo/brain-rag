@@ -4,6 +4,7 @@ node_modules/
 brain.db
 brain.db-wal
 brain.db-shm
+keep.list
 *.log
 
 # Eval artifacts (contain retrieved transcript text)

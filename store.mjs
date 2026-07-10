@@ -57,8 +57,8 @@ function dot(a, b) {
 
 // Top-k search. project optional (exact filter), since optional (min ISO date).
 // recencyBoost: mixes similarity with recency so recent items weigh a bit more.
-// Common ES/EN stopwords; tokenizes keeping ':' and '_' (groups-claim, snake_case).
-const STOP = new Set('the and for are with that this its you our from into not but has have was were will can los las una unos unas del que con por para como más pero sus este esta esto son ser una the'.split(/\s+/));
+// Common English stopwords; tokenizes keeping ':' and '_' (groups-claim, snake_case).
+const STOP = new Set('the and for are with that this its you our from into not but has have was were will can'.split(/\s+/));
 function tokenize(q) {
   return [...new Set((q.toLowerCase().match(/[a-z0-9_:]{3,}/g) || []).filter(t => !STOP.has(t)))];
 }

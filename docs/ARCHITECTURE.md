@@ -8,7 +8,7 @@ the deep dive behind the overview in the [README](../README.md).
 `brain-rag` is a five-stage pipeline plus a retrieval surface:
 
 ```
-ingest:  discover → parse → redact → chunk → embed → store
+ingest:  discover → opt-in filter → parse → redact → chunk → embed → store
 serve:   query → embed → cosine top-k → return
 ```
 
@@ -72,7 +72,9 @@ reasonable middle for conversational text.
 
 ## Stage 4 — Embed (`embed.mjs`)
 
-Uses `@huggingface/transformers` (transformers.js) with `Xenova/paraphrase-multilingual-MiniLM-L12-v2`:
+Uses `@huggingface/transformers` (transformers.js) with `Xenova/multilingual-e5-small` — an e5
+**retrieval** model that needs asymmetric prefixes (`query: ` / `passage: `) so queries and documents
+land in the same space (`embed.mjs::withPrefix`):
 
 - 384-dimensional, mean-pooled, L2-normalized vectors.
 - The model downloads once and is cached; subsequent runs are offline.
@@ -117,17 +119,24 @@ on different scales. This is what recovers exact-term queries (error codes, `gro
 `SKIP_KEYS`) that a pure embedding buries under long, semantically-broad chunks — it took the
 eval from 60% to 80% Recall@5.
 
-## Incremental ingestion (`ingest.mjs`)
+## Opt-in + incremental ingestion (`ingest.mjs`)
 
-The core property: **re-running is cheap**. For each transcript file:
+The brain is **opt-in**: by default nothing is indexed. `ingest.mjs` loads `keep.list` (one
+transcript path per line) into a `KEPT` set and skips any file not in it. A session is added to
+`keep.list` by `mark-keep.mjs` (the `SessionStart` hook, when started with `BRAIN=1`) or by
+`mark-current-keep.mjs` (the `/brain` slash command, mid-session).
 
-1. `stat` it → `(mtime, bytes)`.
-2. If the `sessions` row matches (unchanged) and `--force` is not set → **skip**.
-3. Otherwise: delete the file's old chunks, re-parse/redact/chunk, embed, insert, and upsert the
+Among opted-in files the core property is that **re-running is cheap**. For each transcript file:
+
+1. If it is not in `keep.list` → **skip** (opt-in gate).
+2. `stat` it → `(mtime, bytes)`.
+3. If the `sessions` row matches (unchanged) and `--force` is not set → **skip**.
+4. Otherwise: delete the file's old chunks, re-parse/redact/chunk, embed, insert, and upsert the
    `sessions` row inside a transaction.
 
-So the first run indexes everything; later runs only touch new files and active sessions that grew.
-This is what makes the `SessionEnd` hook viable — closing a session re-indexes just that one file.
+So a run indexes the opted-in sessions; later runs only touch new files and active sessions that
+grew. This is what makes the `SessionEnd` hook viable — closing a session re-indexes just that one
+file (if it was opted in).
 
 ## Retrieval surface (`server.mjs`)
 
@@ -142,16 +151,23 @@ An MCP server (`@modelcontextprotocol/sdk`, stdio transport) exposing:
 Registered globally with `claude mcp add brain --scope user -- node ~/.claude/brain/server.mjs`, so
 the tools are available in every project's sessions.
 
-## Auto-update hook
+## Opt-in and auto-update hooks
 
-A second `SessionEnd` entry in `~/.claude/settings.json` runs the ingest **detached**:
+Two hooks in `~/.claude/settings.json`, added alongside any existing entries:
 
-```
-nohup node "~/.claude/brain/ingest.mjs" >> "~/.claude/brain/ingest.log" 2>&1 &
-```
+- **`SessionStart` → `mark-keep.mjs`**: if the session started with `BRAIN=1` (e.g. `claude --brain`),
+  it appends the session's `transcript_path` to `keep.list`. Without `BRAIN` it does nothing.
+- **`SessionEnd` → `ingest.mjs`**, run **detached**:
 
-Detaching means it never blocks session close; the incremental logic means it only processes the
-session that just ended. It is added alongside any existing `SessionEnd` hooks, not in place of them.
+  ```
+  nohup node "~/.claude/brain/ingest.mjs" >> "~/.claude/brain/ingest.log" 2>&1 &
+  ```
+
+  Detaching means it never blocks session close; the opt-in gate + incremental logic mean it only
+  processes the session that just ended, and only if it was opted in.
+
+Mid-session, the `/brain` slash command (`commands/brain.md` → `mark-current-keep.mjs`) opts the
+current conversation in after the fact.
 
 ## Evaluation (`eval.mjs`)
 
@@ -166,4 +182,4 @@ set whenever a real query misses.
 
 - **Chunking is char-based**, not token-aware or semantic-boundary-aware.
 - **`get_state` notes are manual** — there is no flow yet to generate/update `state/<project>.md`.
-- **Single embedding model.** No hybrid lexical+vector (BM25) fallback for exact-term queries.
+- **Brute-force search.** No ANN index yet; revisit (`sqlite-vec` / FAISS) past a few hundred thousand chunks.

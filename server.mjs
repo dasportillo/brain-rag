@@ -18,10 +18,10 @@ const server = new McpServer(
       '',
       'WHEN TO USE IT (proactively, even if not asked with these exact words):',
       '- When the user asks about the STATE of something: "where did I leave off?", "give me the state of X",',
-      '  "what do you know about this project?", "en qué quedé", "dame el estado de X".',
+      '  "what do you know about this project?", "what state is X in?".',
       '  -> get_state(project) for the curated state.',
       '- When they ask about DECISIONS or PAST WORK: "what did we decide about Y?", "how did I solve Z?",',
-      '  "what did we do with the ledger?", "search the brain for…", "buscá en el brain…". -> search_context(query).',
+      '  "what did we do with the ledger?", "search the brain for…". -> search_context(query).',
       '- BEFORE assuming there is no prior context on a project/decision: call search_context first.',
       '- When starting on an unfamiliar repo, a get_state/search_context gives the ramp-up context.',
       '',
@@ -42,7 +42,7 @@ function currentProject() {
 
 server.tool(
   'search_context',
-  'Searches the history of work conversations (all projects). Returns the most relevant chunks with project/date. USE IT when the user asks "what did we decide about X?", "how did I solve Y?", "what did we do with Z?", "search the brain for…" / "buscá en el brain…", or before assuming there is no prior context on a topic. Recovers past decisions and work.',
+  'Searches the history of work conversations (all projects). Returns the most relevant chunks with project/date. USE IT when the user asks "what did we decide about X?", "how did I solve Y?", "what did we do with Z?", "search the brain for…", or before assuming there is no prior context on a topic. Recovers past decisions and work.',
   {
     query: z.string().describe('what to search for, in natural language'),
     project: z.string().optional().describe('filter to one project; omit to search all'),
@@ -72,7 +72,7 @@ server.tool(
 
 server.tool(
   'get_state',
-  'Returns the curated CURRENT state of a project (state/<project>.md), the precise source of "where I am today". USE IT when the user asks "where did I leave off?", "give me the state of X", "what state is X in?", "what do you know about this project?" / "en qué quedé", "dame el estado de X". If it does not exist, say so and offer to create it.',
+  'Returns the curated CURRENT state of a project (state/<project>.md), the precise source of "where I am today". USE IT when the user asks "where did I leave off?", "give me the state of X", "what state is X in?", "what do you know about this project?". If it does not exist, say so and offer to create it.',
   { project: z.string().optional().describe('project; defaults to the current cwd') },
   async ({ project }) => {
     const p = project || currentProject();
