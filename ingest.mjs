@@ -126,5 +126,16 @@ for (const file of files) {
   }
 }
 
-console.log(`\n✔ ingest: ${processed} processed, ${skipped} unchanged (skip), ${totalChunks} new chunks${NO_EMBED ? ' (no embeddings)' : ''}`);
+// prune sessions whose transcript file was deleted (self-healing; skip on partial --limit runs)
+let pruned = 0;
+if (LIMIT === Infinity) {
+  const delSession = db.prepare('DELETE FROM sessions WHERE path = ?');
+  for (const { path } of db.prepare('SELECT path FROM sessions').all()) {
+    if (existsSync(path)) continue;
+    db.exec('BEGIN'); delChunks.run(path); delSession.run(path); db.exec('COMMIT');
+    pruned++;
+  }
+}
+
+console.log(`\n✔ ingest: ${processed} processed, ${skipped} unchanged (skip), ${totalChunks} new chunks${pruned ? `, ${pruned} pruned` : ''}${NO_EMBED ? ' (no embeddings)' : ''}`);
 console.log(stats(db));

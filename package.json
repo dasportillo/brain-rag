@@ -8,6 +8,7 @@
   },
   "files": [
     "cli.mjs",
+    "quiet.mjs",
     "install.mjs",
     "uninstall.mjs",
     "server.mjs",

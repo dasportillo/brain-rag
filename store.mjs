@@ -1,10 +1,12 @@
 // Storage: Node's built-in SQLite (node:sqlite, no native compilation).
 // Embeddings are stored as a BLOB (Float32Array) and search is brute-force cosine
 // in JS — at this scale (tens of thousands of chunks) it's instant and dependency-free.
-import { DatabaseSync } from 'node:sqlite';
+import './quiet.mjs'; // silence node:sqlite's ExperimentalWarning — must run before node:sqlite loads
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
+// Loaded dynamically (after quiet.mjs) so the experimental warning is suppressed for every entry point.
+const { DatabaseSync } = await import('node:sqlite');
 
 export const BRAIN_DIR = process.env.BRAIN_DIR || join(homedir(), '.claude', 'brain');
 const DB_PATH = process.env.BRAIN_DB || join(BRAIN_DIR, 'brain.db');
