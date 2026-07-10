@@ -152,6 +152,17 @@ time, and the results are annotated accordingly:
 This is a **signal only** — every version stays in the results — so you can distinguish the live
 version of a decision from an earlier revision without losing the history that led to it.
 
+### Cross-project facet in search
+
+When one query's results blend several projects, search says so up front — `📂 Results span N
+projects: a (4) · b (3) …` — because the same term can mean different things per project (a
+financial event *audit-log* vs medical-claims *"auditoría"*) and an inline blend goes unnoticed.
+Counts only, ranking untouched. It deliberately does **not** try to flag which project is
+"off-topic": measured on a live corpus, centroid and query-residual similarities between
+false-friend project pairs (0.78–0.83) overlap same-product pairs (0.68–0.84), so no threshold
+separates them — a flag would be wrong too often to trust. The reader (usually the model) sees the
+blend and scopes with `project:` when needed.
+
 ### Current state layer (`get_state` / `save_state`)
 
 `get_state` serves a curated `state/<project>.md` — the precise "where am I parked today" note that
@@ -167,6 +178,10 @@ node state.mjs my-notes        # dump a project's recent material (what /state f
 `/state [project]` then writes `state/<project>.md` (Now / In flight / Decisions / Blockers / Next).
 Overwriting is deliberate: it removes stale/reverted decisions instead of letting them resurface. The
 notes are gitignored — they contain your work details.
+
+When **no curated note exists**, `get_state` no longer dead-ends: it falls back to the project's
+recent indexed activity (last 30 days, deduped, clearly marked *NOT curated*) so the caller gets raw
+material to work from — and a nudge to synthesize and `save_state` the real note.
 
 ### Project aliases (`aliases.json`)
 

@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { openDb, searchChunks, listProjects, canonicalProject, BRAIN_DIR } from './store.mjs';
+import { openDb, searchChunks, listProjects, canonicalProject, recentActivity, BRAIN_DIR } from './store.mjs';
 import { gitRootName } from './transcripts.mjs';
 import { embedOne } from './embed.mjs';
 
@@ -17,7 +17,7 @@ const db = openDb();
 const clip = (t, n) => (t && t.length > n) ? t.slice(0, n).trimEnd() + ` … [+${t.length - n} chars]` : t;
 
 const server = new McpServer(
-  { name: 'brain', version: '0.3.0' },
+  { name: 'brain', version: '0.4.0' },
   {
     instructions: [
       "This server is the user's \"second brain\": persistent memory of all their work",
@@ -37,7 +37,7 @@ const server = new McpServer(
       '  non-obvious project context): call keep_session so it gets saved. The brain is OPT-IN, so an',
       '  un-kept chat is lost. Do NOT keep trivial / throwaway / purely exploratory chats.',
       '',
-      'TOOLS: get_state(project?) = curated "where I am today"; if missing, offer to create it with save_state.',
+      'TOOLS: get_state(project?) = curated "where I am today"; if no note exists it returns recent activity (NOT curated) — synthesize + save_state to persist.',
       'save_state(content, project?) = write/refresh that curated note (overwrites; drop reverted decisions).',
       'keep_session() = save THIS conversation to the brain (call proactively when it is worth remembering).',
       'search_context(query, project?, since?) = searches the WHOLE history. list_projects() = what is indexed and how fresh.',
@@ -69,8 +69,15 @@ server.tool(
     const versionNote = (h) => h.outdatedBy
       ? ` · ⚠️ SUPERSEDED — newer related entry on ${h.outdatedBy}`
       : (h.supersedes?.length ? ` · ✅ latest of ${new Set(h.supersedes).size + 1} versions (older: ${[...new Set(h.supersedes)].join(', ')})` : '');
+    // Cross-project facet: announce when results blend projects — the same term can mean
+    // different things per project (false friends), and an inline blend goes unnoticed.
+    const facetLine = hits.facet
+      ? `📂 Results span ${hits.facet.length} projects: ` +
+        hits.facet.map(f => `${f.project} (${f.n})`).join(' · ') +
+        `. The same term can mean different things per project — if some look off-topic, pass project: to scope.\n\n`
+      : '';
     const text = hits.length
-      ? hits.map(h => `### ${h.project} · ${h.ts?.slice(0, 10) ?? '?'} · ${h.role}${h.title ? ` · "${h.title}"` : ''} (score ${h.score.toFixed(3)})${versionNote(h)}\n${clip(h.text, h.role === 'summary' ? 2000 : 1200)}`).join('\n\n')
+      ? facetLine + hits.map(h => `### ${h.project} · ${h.ts?.slice(0, 10) ?? '?'} · ${h.role}${h.title ? ` · "${h.title}"` : ''} (score ${h.score.toFixed(3)})${versionNote(h)}\n${clip(h.text, h.role === 'summary' ? 2000 : 1200)}`).join('\n\n')
       : 'No results.';
     return { content: [{ type: 'text', text }] };
   }
@@ -89,14 +96,19 @@ server.tool(
 
 server.tool(
   'get_state',
-  'Returns the curated CURRENT state of a project (state/<project>.md), the precise source of "where I am today". USE IT when the user asks "where did I leave off?", "give me the state of X", "what state is X in?", "what do you know about this project?". If it does not exist, offer to create it with save_state.',
+  'Returns the curated CURRENT state of a project (state/<project>.md), the precise source of "where I am today". USE IT when the user asks "where did I leave off?", "give me the state of X", "what state is X in?", "what do you know about this project?". If no curated note exists it falls back to recent indexed activity (clearly marked NOT curated) — synthesize it and save_state to persist the real note.',
   { project: z.string().optional().describe('project; defaults to the current cwd') },
   async ({ project }) => {
     const p = canonicalProject(project || currentProject());
     const file = join(BRAIN_DIR, 'state', `${p}.md`);
-    const text = existsSync(file)
-      ? readFileSync(file, 'utf8')
-      : `No curated state for "${p}" yet. Use save_state to create it.`;
+    if (existsSync(file)) return { content: [{ type: 'text', text: readFileSync(file, 'utf8') }] };
+    // No curated note: fall back to recent indexed activity so the caller gets raw material
+    // instead of a dead end. Clearly marked as NOT curated — it's history, not a state note.
+    const recent = recentActivity(db, p, { days: 30, limit: 30 });
+    const text = recent.length
+      ? `No curated state for "${p}" — showing recent activity instead (NOT curated; synthesize and save_state to fix that):\n\n` +
+        recent.map(r => `[${r.ts?.slice(0, 10) ?? '?'} ${r.role}] ${clip(r.text.replace(/\s+/g, ' ').trim(), 400)}`).join('\n')
+      : `No curated state for "${p}" and no recent indexed activity. If the name is off, run list_projects for the exact one; use save_state to create the note.`;
     return { content: [{ type: 'text', text }] };
   }
 );

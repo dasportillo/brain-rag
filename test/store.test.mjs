@@ -10,7 +10,7 @@ const dir = mkdtempSync(join(tmpdir(), 'brain-store-'));
 process.env.BRAIN_DIR = dir;
 process.env.BRAIN_DB = join(dir, 'brain.db');
 
-const { openDb, vecToBlob, searchChunks, diffChunks } = await import('../store.mjs');
+const { openDb, vecToBlob, searchChunks, diffChunks, recentActivity } = await import('../store.mjs');
 
 test('diffChunks: only new/changed text embeds; vanished chunks are stale', () => {
   const existing = [{ id: 1, text: 'turn a' }, { id: 2, text: 'turn b' }, { id: 3, text: 'old summary' }];
@@ -61,6 +61,31 @@ test('session title is attached to hits (and only where present)', () => {
 test('project filter restricts the candidate set', () => {
   const none = searchChunks(db, vec(1, 0), { k: 5, project: 'nope', queryText: 'oauth-idp' });
   assert.equal(none.length, 0);
+});
+
+test('no cross-domain facet when all hits share one project', () => {
+  assert.equal(results.facet, undefined);
+});
+
+test('cross-project facet reports per-project counts, largest first', () => {
+  // same query vocabulary ("oauth-idp") from a different project → blends into the result set
+  insC.run('/p/s4.jsonl', 'medical', 's4', '2026-01-04', 'assistant',
+    'oauth-idp mentioned while auditing medical claims glosas', vecToBlob(vec(-0.5, 0.866)));
+  const hits = searchChunks(db, vec(1, 0), { k: 5, queryText: 'oauth-idp groups authorizer', recencyBoost: 0 });
+  assert.ok(hits.facet, 'facet present when hits span projects');
+  assert.deepEqual(hits.facet.map(f => f.project), ['proj', 'medical'], 'sorted by hit count');
+  assert.equal(hits.facet.find(f => f.project === 'proj').n, 2);
+  assert.equal(hits.facet.find(f => f.project === 'medical').n, 1);
+});
+
+test('recentActivity: window filter, dedup, oldest→newest', () => {
+  const iso = (daysAgo) => new Date(Date.now() - daysAgo * 86400000).toISOString();
+  insC.run('/r/a.jsonl', 'ra', 'r1', iso(2), 'assistant', 'newest note', null);
+  insC.run('/r/a.jsonl', 'ra', 'r1', iso(5), 'user', 'older note', null);
+  insC.run('/r/a.jsonl', 'ra', 'r1', iso(5), 'user', 'older note', null); // dup
+  insC.run('/r/a.jsonl', 'ra', 'r1', iso(40), 'user', 'beyond the window', null);
+  const rows = recentActivity(db, 'ra', { days: 30, limit: 10 });
+  assert.deepEqual(rows.map(r => r.text), ['older note', 'newest note'], 'deduped, chronological, windowed');
 });
 
 test.after(() => rmSync(dir, { recursive: true, force: true }));

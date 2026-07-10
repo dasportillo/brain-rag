@@ -17,6 +17,10 @@ const qvec = await embedOne(query);
 const hits = searchChunks(db, qvec, { project, k: 8, queryText: query });
 
 console.log(`\n🔎 "${query}"${project ? ` [${project}]` : ''}\n`);
+if (hits.facet) {
+  console.log(`📂 spans ${hits.facet.length} projects: ` +
+    hits.facet.map(f => `${f.project} (${f.n})`).join(' · ') + '  — same term may differ per project; use --project to scope\n');
+}
 const versionNote = (h) => h.outdatedBy
   ? `  ⚠️ superseded → newer on ${h.outdatedBy}`
   : (h.supersedes?.length ? `  ✅ latest of ${new Set(h.supersedes).size + 1} (older: ${[...new Set(h.supersedes)].join(', ')})` : '');
