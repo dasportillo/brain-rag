@@ -41,11 +41,17 @@ Assistant content is an array of blocks (`thinking`, `text`, `tool_use`, …). W
 blocks. User content that is an array (tool results) is skipped — that filters out most tool noise
 automatically.
 
-## Stage 1 — Parse (`transcripts.mjs::parseTurns`)
+## Stage 1 — Parse (`transcripts.mjs::parseTranscript`)
 
-Streams the file line by line, `JSON.parse` per line (malformed lines are skipped), and yields
-normalized turns `{ role, text, ts, session }`. Command wrappers and harness reminders
-(`<command-name>`, `<local-command…>`, `<system-reminder>`, …) are dropped as noise.
+Reads the file once and returns `{ turns, title }`. Each turn is normalized to
+`{ role, text, ts, session }`; command wrappers and harness reminders (`<command-name>`,
+`<local-command…>`, `<system-reminder>`, …) are dropped as noise. Two special cases:
+
+- **Context-compaction summaries** (`isCompactSummary` entries) are system-written recaps, not the
+  user's words, so they are tagged `role: "summary"` — kept **whole** (see Stage 3), and only the
+  latest (most complete) summary per session is retained.
+- **`ai-title`** (Claude Code's auto-generated session title) is surfaced as `title`, stored on the
+  `sessions` row, and attached to every search hit so results show which session they came from.
 
 ## Stage 2 — Redact (`transcripts.mjs::redact`)
 
@@ -53,9 +59,12 @@ Before storing, obvious secrets are replaced with placeholders:
 
 - JWTs (`eyJ….….…`) → `[JWT_REDACTED]`
 - AWS access keys (`AKIA…`) → `[AWS_KEY_REDACTED]`
+- Google API keys (`AIza…`) → `[GOOGLE_KEY_REDACTED]`
+- OpenAI / Anthropic-style keys (`sk-…`, `sk-proj-…`, `sk-ant-…`) → `[API_KEY_REDACTED]`
 - Slack tokens (`xox…`) → `[SLACK_TOKEN_REDACTED]`
+- GitHub tokens (`ghp_/gho_/ghu_/ghs_/ghr_…`) → `[GH_TOKEN_REDACTED]`
 - PEM private keys → `[PRIVATE_KEY_REDACTED]`
-- GitHub tokens (`ghp_…`) → `[GH_TOKEN_REDACTED]`
+- Passwords in URLs (`user:pass@host`) and `KEY=value` / `KEY: value` env-style secrets (`password`, `secret`, `token`, `api_key`, …) → `[SECRET_REDACTED]`
 
 This is a best-effort scrub, not a guarantee. It exists because the corpus demonstrably contains
 credentials from past sessions. The store is local, so this is defense in depth.
@@ -65,6 +74,8 @@ credentials from past sessions. The store is local, so this is defense in depth.
 Each turn is split into ~1800-character windows with 200-character overlap. Turns shorter than the
 window become a single chunk. **Chunks under 80 characters are dropped** at ingest time — these are
 low-signal narration lines ("Let me check the config…") that would otherwise pollute retrieval.
+**Summaries are the exception**: they are stored whole (one row) so the coherent recap survives; their
+embedding is computed over a representative head slice (the model window truncates long text anyway).
 
 Chunk size is a recall/precision tradeoff: smaller chunks localize a fact better but lose surrounding
 context; larger chunks preserve context but dilute the embedding. ~1800 chars (~450 tokens) is a
@@ -112,10 +123,11 @@ few hundred thousand chunks, this is the first thing to revisit (add an ANN inde
 Pure-vector mode scores each candidate as `cosine + recencyBoost` (boost `0.05 * exp(-ageDays/45)`),
 a small nudge toward recent conversations without letting recency dominate.
 
-**Hybrid mode** (when `queryText` is passed) fuses two rankings with Reciprocal Rank Fusion (RRF):
-the vector ranking and a lexical ranking (rarity/idf-weighted term overlap over the candidate set).
-RRF (`score = Σ 1/(60 + rank)`) needs no score normalization and is robust to the two signals living
-on different scales. This is what recovers exact-term queries (error codes, `groups-claim`,
+**Hybrid mode** (when `queryText` is passed — the MCP server and CLI always do) fuses rankings with
+Reciprocal Rank Fusion (RRF): the vector ranking, a lexical ranking (rarity/idf-weighted term overlap
+over the candidate set), and a **recency** ranking at half weight (a gentle nudge worth ~half a vector
+rank, so recent conversations surface without dominating). RRF (`score = Σ w/(60 + rank)`) needs no
+score normalization and is robust to signals living on different scales. This is what recovers exact-term queries (error codes, `groups-claim`,
 `SKIP_KEYS`) that a pure embedding buries under long, semantically-broad chunks — it took the
 eval from 60% to 80% Recall@5.
 

@@ -19,6 +19,6 @@ const hits = searchChunks(db, qvec, { project, k: 8, queryText: query });
 console.log(`\n🔎 "${query}"${project ? ` [${project}]` : ''}\n`);
 for (const h of hits) {
   const when = h.ts ? h.ts.slice(0, 10) : '?';
-  console.log(`[${h.score.toFixed(3)}] ${h.project} · ${when} · ${h.role}`);
+  console.log(`[${h.score.toFixed(3)}] ${h.project} · ${when} · ${h.role}${h.title ? ` · "${h.title}"` : ''}`);
   console.log(`   ${h.text.replace(/\s+/g, ' ').slice(0, 220)}\n`);
 }

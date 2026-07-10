@@ -16,7 +16,7 @@ import { readdirSync, statSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { openDb, vecToBlob, stats } from './store.mjs';
-import { parseTurns, projectFromPath, chunkText, redact } from './transcripts.mjs';
+import { parseTranscript, projectFromPath, chunkText, redact } from './transcripts.mjs';
 
 const PROJECTS = join(homedir(), '.claude', 'projects');
 
@@ -63,10 +63,10 @@ const getSession    = db.prepare('SELECT mtime, bytes FROM sessions WHERE path =
 const delChunks     = db.prepare('DELETE FROM chunks WHERE path = ?');
 const insChunk      = db.prepare('INSERT INTO chunks(path,project,session,ts,role,text,embedding) VALUES(?,?,?,?,?,?,?)');
 const upsertSession = db.prepare(`
-  INSERT INTO sessions(path,project,session,mtime,bytes,chunks,indexed_at) VALUES(?,?,?,?,?,?,?)
+  INSERT INTO sessions(path,project,session,mtime,bytes,chunks,indexed_at,title) VALUES(?,?,?,?,?,?,?,?)
   ON CONFLICT(path) DO UPDATE SET
     project=excluded.project, session=excluded.session, mtime=excluded.mtime,
-    bytes=excluded.bytes, chunks=excluded.chunks, indexed_at=excluded.indexed_at`);
+    bytes=excluded.bytes, chunks=excluded.chunks, indexed_at=excluded.indexed_at, title=excluded.title`);
 
 let processed = 0, skipped = 0, totalChunks = 0;
 
@@ -79,9 +79,21 @@ for (const file of files) {
   if (!FORCE && prev && prev.mtime === mtime && prev.bytes === st.size) { skipped++; continue; }
 
   const project = projectFromPath(file);
+  const { turns, title } = parseTranscript(file);
+  // compaction summaries are progressive (each recaps everything so far); keep only the LAST,
+  // the most complete one, so several near-duplicate summaries don't flood retrieval.
+  const lastSummaryIdx = turns.map(t => t.role).lastIndexOf('summary');
   const records = [];
-  for (const turn of parseTurns(file)) {
-    for (const piece of chunkText(redact(turn.text))) {
+  for (const [idx, turn] of turns.entries()) {
+    if (turn.role === 'summary' && idx !== lastSummaryIdx) continue; // drop superseded summaries
+    const clean = redact(turn.text);
+    if (turn.role === 'summary') {
+      // keep the summary WHOLE (a coherent recap) instead of shredding it into 1800-char chunks;
+      // embed a representative head slice (the model window truncates long text anyway).
+      records.push({ session: turn.session, ts: turn.ts, role: 'summary', text: clean, embedText: clean.slice(0, 2000) });
+      continue;
+    }
+    for (const piece of chunkText(clean)) {
       // drop tiny chunks (narration like "Let me check X" before a tool call)
       if (piece.trim().length < 80) continue;
       records.push({ session: turn.session, ts: turn.ts, role: turn.role, text: piece });
@@ -89,7 +101,7 @@ for (const file of files) {
   }
 
   let embeddings = [];
-  if (embed && records.length) embeddings = await embed(records.map(r => r.text));
+  if (embed && records.length) embeddings = await embed(records.map(r => r.embedText ?? r.text));
 
   db.exec('BEGIN');
   delChunks.run(file);
@@ -97,7 +109,7 @@ for (const file of files) {
     const blob = embeddings[i] ? vecToBlob(embeddings[i]) : null;
     insChunk.run(file, project, r.session ?? null, r.ts ?? null, r.role, r.text, blob);
   });
-  upsertSession.run(file, project, records[0]?.session ?? null, mtime, st.size, records.length, new Date().toISOString());
+  upsertSession.run(file, project, records[0]?.session ?? null, mtime, st.size, records.length, new Date().toISOString(), title ?? null);
   db.exec('COMMIT');
 
   processed++;
