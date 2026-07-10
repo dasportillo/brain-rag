@@ -15,6 +15,7 @@
     "embed.mjs",
     "ingest.mjs",
     "import.mjs",
+    "forget.mjs",
     "transcripts.mjs",
     "search.mjs",
     "state.mjs",

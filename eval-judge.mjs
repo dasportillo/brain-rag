@@ -7,13 +7,15 @@
 // The judge (which of the K results are relevant) is produced by an LLM over eval-bundle.json and
 // written to verdicts.json as { "<caseId>": [true,false,...]  }. Keeping it out-of-band means the
 // judge can be Claude today or an API call later, without changing retrieval or metrics.
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { openDb, searchChunks } from './store.mjs';
 
 const K = Number(process.env.EVAL_K || 5);
 const mode = process.argv[2];
 const db = openDb();
-const casesUrl = new URL('./eval-cases.json', import.meta.url);
+// Prefer eval-cases.local.json (gitignored, real cases for your corpus) over the shipped example.
+const localCases = new URL('./eval-cases.local.json', import.meta.url);
+const casesUrl = existsSync(localCases) ? localCases : new URL('./eval-cases.json', import.meta.url);
 const bundleUrl = new URL('./eval-bundle.json', import.meta.url);
 const cases = JSON.parse(readFileSync(casesUrl, 'utf8'));
 

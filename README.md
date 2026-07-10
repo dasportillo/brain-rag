@@ -86,8 +86,8 @@ Just the search side (no ingestion/hooks) — point Claude Code straight at the 
 claude mcp add brain --scope user -- npx -y brain-rag serve
 ```
 
-The `brain-rag` CLI also exposes `import` (backfill past conversations), `ingest`, `search`, `stats`,
-and `state` (`brain-rag help`).
+The `brain-rag` CLI also exposes `import` (backfill past conversations), `forget` (remove sessions
+from the index), `ingest`, `search`, `stats`, and `state` (`brain-rag help`).
 
 **Import your existing conversations.** The brain is opt-in, so past chats aren't indexed until you
 bring them in:

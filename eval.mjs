@@ -4,12 +4,15 @@
 //
 //   node eval.mjs          # K=5
 //   node eval.mjs 8        # K=8
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { openDb, searchChunks } from './store.mjs';
 import { embed } from './embed.mjs';
 
 const K = Number(process.argv[2] || 5);
-const cases = JSON.parse(readFileSync(new URL('./eval-cases.json', import.meta.url), 'utf8'));
+// Prefer eval-cases.local.json (gitignored, real cases for your corpus) over the shipped example.
+const localUrl = new URL('./eval-cases.local.json', import.meta.url);
+const casesUrl = existsSync(localUrl) ? localUrl : new URL('./eval-cases.json', import.meta.url);
+const cases = JSON.parse(readFileSync(casesUrl, 'utf8'));
 const db = openDb();
 
 const qvecs = await embed(cases.map(c => c.query), { kind: 'query' });

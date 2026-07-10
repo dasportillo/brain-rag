@@ -15,7 +15,7 @@
 import { readdirSync, statSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { openDb, vecToBlob, stats } from './store.mjs';
+import { openDb, vecToBlob, stats, diffChunks } from './store.mjs';
 import { parseTranscript, projectFromPath, chunkText, redact } from './transcripts.mjs';
 
 const PROJECTS = join(homedir(), '.claude', 'projects');
@@ -61,6 +61,7 @@ if (!NO_EMBED) ({ embed } = await import('./embed.mjs'));
 const files = findTranscripts(PROJECTS);
 const getSession    = db.prepare('SELECT mtime, bytes FROM sessions WHERE path = ?');
 const delChunks     = db.prepare('DELETE FROM chunks WHERE path = ?');
+const delChunkById  = db.prepare('DELETE FROM chunks WHERE id = ?');
 const insChunk      = db.prepare('INSERT INTO chunks(path,project,session,ts,role,text,embedding) VALUES(?,?,?,?,?,?,?)');
 const upsertSession = db.prepare(`
   INSERT INTO sessions(path,project,session,mtime,bytes,chunks,indexed_at,title) VALUES(?,?,?,?,?,?,?,?)
@@ -100,12 +101,18 @@ for (const file of files) {
     }
   }
 
+  // Append-only: embed only new/changed chunks (matched by text), keep unchanged ones (they already
+  // have embeddings), delete stale ones. --force re-embeds the whole file (e.g. after a model swap).
+  const existingRows = FORCE ? [] : db.prepare('SELECT id, text FROM chunks WHERE path = ?').all(file);
+  const { toEmbed, staleIds } = diffChunks(existingRows, records);
+
   let embeddings = [];
-  if (embed && records.length) embeddings = await embed(records.map(r => r.embedText ?? r.text));
+  if (embed && toEmbed.length) embeddings = await embed(toEmbed.map(r => r.embedText ?? r.text));
 
   db.exec('BEGIN');
-  delChunks.run(file);
-  records.forEach((r, i) => {
+  if (FORCE) delChunks.run(file);
+  else for (const id of staleIds) delChunkById.run(id);
+  toEmbed.forEach((r, i) => {
     const blob = embeddings[i] ? vecToBlob(embeddings[i]) : null;
     insChunk.run(file, project, r.session ?? null, r.ts ?? null, r.role, r.text, blob);
   });
@@ -113,7 +120,7 @@ for (const file of files) {
   db.exec('COMMIT');
 
   processed++;
-  totalChunks += records.length;
+  totalChunks += toEmbed.length;
   if (processed % 10 === 0 || records.length > 200) {
     console.log(`  [${processed}] ${project} — ${records.length} chunks`);
   }

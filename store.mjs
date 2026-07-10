@@ -118,6 +118,17 @@ export function searchChunks(db, qvec, { project = null, k = 8, since = null, re
   return out;
 }
 
+// Diff a file's existing chunk rows against freshly-computed records (matched by text), so ingest
+// only embeds new/changed chunks and deletes stale ones — instead of re-embedding the whole file
+// every time an active session grows.
+export function diffChunks(existingRows, records) {
+  const existing = new Map(existingRows.map(r => [r.text, r.id]));
+  const nextTexts = new Set(records.map(r => r.text));
+  const toEmbed = records.filter(r => !existing.has(r.text));                       // new/changed → embed
+  const staleIds = existingRows.filter(r => !nextTexts.has(r.text)).map(r => r.id); // vanished → delete
+  return { toEmbed, staleIds };
+}
+
 export function listProjects(db) {
   return db.prepare(`
     SELECT project,

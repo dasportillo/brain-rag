@@ -10,7 +10,22 @@ const dir = mkdtempSync(join(tmpdir(), 'brain-store-'));
 process.env.BRAIN_DIR = dir;
 process.env.BRAIN_DB = join(dir, 'brain.db');
 
-const { openDb, vecToBlob, searchChunks } = await import('../store.mjs');
+const { openDb, vecToBlob, searchChunks, diffChunks } = await import('../store.mjs');
+
+test('diffChunks: only new/changed text embeds; vanished chunks are stale', () => {
+  const existing = [{ id: 1, text: 'turn a' }, { id: 2, text: 'turn b' }, { id: 3, text: 'old summary' }];
+  const records = [{ text: 'turn a' }, { text: 'turn b' }, { text: 'turn c' }, { text: 'new summary' }];
+  const { toEmbed, staleIds } = diffChunks(existing, records);
+  assert.deepEqual(toEmbed.map(r => r.text), ['turn c', 'new summary'], 'only new/changed embed');
+  assert.deepEqual(staleIds, [3], 'the vanished old summary is stale');
+});
+
+test('diffChunks: unchanged file embeds nothing, deletes nothing', () => {
+  const rows = [{ id: 1, text: 'x' }, { id: 2, text: 'y' }];
+  const { toEmbed, staleIds } = diffChunks(rows, [{ text: 'x' }, { text: 'y' }]);
+  assert.equal(toEmbed.length, 0);
+  assert.equal(staleIds.length, 0);
+});
 
 // unit vectors in the first two dims (rest zero) → cosine == dot is exact and easy to reason about
 const vec = (a, b) => { const v = new Array(384).fill(0); v[0] = a; v[1] = b; return v; };

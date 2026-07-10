@@ -8,6 +8,7 @@ keep.list
 *.log
 
 # Eval artifacts (contain retrieved transcript text)
+eval-cases.local.json
 eval-bundle.json
 verdicts.json
 

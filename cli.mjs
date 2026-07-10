@@ -8,6 +8,7 @@ switch (cmd) {
   case 'serve':        await import('./server.mjs'); break;              // MCP stdio server (claude mcp add)
   case 'ingest':       await import('./ingest.mjs'); break;             // index opted-in transcripts
   case 'import':       await import('./import.mjs'); break;             // backfill existing transcripts
+  case 'forget':       await import('./forget.mjs'); break;             // remove sessions from the index
   case 'stats':        process.argv.push('--stats'); await import('./ingest.mjs'); break;
   case 'search':       await import('./search.mjs'); break;             // CLI search
   case 'state':        await import('./state.mjs'); break;              // dump a project's recent activity
@@ -25,6 +26,7 @@ Usage: brain-rag <command>
   serve           Run the MCP server (stdio) — this is what 'claude mcp add' launches
   ingest          Ingest opted-in transcripts into the index
   import [filter] Backfill EXISTING conversations into the brain (--dry to preview)
+  forget <filter> Remove matching sessions from the index + keep.list (--all, --dry)
   stats           Print index status
   search "query"  Search the brain from the CLI
   state [project] Dump a project's recent activity (raw material for /state)
