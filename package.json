@@ -8,7 +8,8 @@
     "ingest": "node ingest.mjs",
     "search": "node search.mjs",
     "stats": "node ingest.mjs --stats",
-    "serve": "node server.mjs"
+    "serve": "node server.mjs",
+    "test": "node --test"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.3.0",
