@@ -1,6 +1,6 @@
 {
   "name": "brain-rag",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Local, private RAG second brain over your Claude Code transcripts, served back to Claude Code as an MCP server.",
   "type": "module",
   "bin": {
@@ -17,6 +17,7 @@
     "ingest.mjs",
     "import.mjs",
     "forget.mjs",
+    "relabel.mjs",
     "transcripts.mjs",
     "search.mjs",
     "state.mjs",
