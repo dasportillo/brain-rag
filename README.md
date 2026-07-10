@@ -73,7 +73,7 @@ Requires **Node 22.5+** (built-in `node:sqlite`). Tested on Node 25.
 ### Via npm (recommended)
 
 ```bash
-npx -y @dasportillo/brain-rag install
+npx -y brain-rag install
 ```
 
 Registers the MCP server, installs the `/brain` and `/state` slash commands, and prints the opt-in
@@ -83,7 +83,7 @@ package, nothing is copied; only the index and state notes live under `~/.claude
 Just the search side (no ingestion/hooks) — point Claude Code straight at the server:
 
 ```bash
-claude mcp add brain --scope user -- npx -y @dasportillo/brain-rag serve
+claude mcp add brain --scope user -- npx -y brain-rag serve
 ```
 
 The `brain-rag` CLI also exposes `ingest`, `search`, `stats`, and `state` (`brain-rag help`).

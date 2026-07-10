@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
-const NAME = pkg.name;                 // e.g. @dasportillo/brain-rag
+const NAME = pkg.name;                 // e.g. brain-rag
 const NPX = `npx -y ${NAME}`;
 const BRAIN_DIR = process.env.BRAIN_DIR || join(homedir(), '.claude', 'brain');
 const CMD_DIR = join(homedir(), '.claude', 'commands');

@@ -1,5 +1,5 @@
 {
-  "name": "@dasportillo/brain-rag",
+  "name": "brain-rag",
   "version": "0.1.0",
   "description": "Local, private RAG second brain over your Claude Code transcripts, served back to Claude Code as an MCP server.",
   "type": "module",
