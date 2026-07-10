@@ -1,13 +1,32 @@
 // Parse, chunk, and redact Claude Code .jsonl transcripts.
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
+import { dirname, basename, join } from 'node:path';
 
-// The project name comes from the dashified directory Claude Code uses:
+// FALLBACK project name, from the dashified directory Claude Code uses:
 //   /Users/x/.claude/projects/-Users-you-project-my-project/<sess>.jsonl
 // -> "my-project"
+// Only used when a transcript has no cwd (older transcripts); gitRootName is the primary source.
 export function projectFromPath(filePath) {
   const m = filePath.match(/\/projects\/([^/]+)\//);
   if (!m) return 'unknown';
   return m[1].replace(/^-Users-[^-]+-project-/, '').replace(/^-+/, '') || m[1];
+}
+
+// PRIMARY project name: name a project by its GIT REPO, not the folder path — so the same repo is ONE
+// project no matter which subdirectory Claude was launched in (…/repo and …/repo/src/x both → "repo").
+// Walk up from the session's real cwd to the nearest .git; the project is that repo folder's name.
+// Universal across OS/layout (no assumption about where projects live, unlike the dashified fallback).
+// Falls back to the cwd's own basename when it isn't inside a repo. basename is a pure string op, so
+// this still returns the repo name even if the folder was since deleted (only the .git probe needs disk).
+export function gitRootName(cwd) {
+  if (!cwd) return null;
+  let dir = cwd;
+  for (;;) {
+    if (existsSync(join(dir, '.git'))) return basename(dir);
+    const parent = dirname(dir);
+    if (parent === dir) return basename(cwd); // reached the filesystem root: not inside a repo
+    dir = parent;
+  }
 }
 
 // Noise we do NOT want in the index (command wrappers, local stdout, harness reminders).
@@ -54,7 +73,7 @@ export function parseTranscript(filePath) {
   let title = null;
   const actions = [];
   const seenAction = new Set();
-  let lastTs = null, sessionId = null;
+  let lastTs = null, sessionId = null, cwd = null;
 
   for (const line of content.split('\n')) {
     if (!line.trim()) continue;
@@ -62,6 +81,7 @@ export function parseTranscript(filePath) {
     try { obj = JSON.parse(line); } catch { continue; }
     if (obj.sessionId) sessionId = obj.sessionId;
     if (obj.timestamp) lastTs = obj.timestamp;
+    if (!cwd && obj.cwd) cwd = obj.cwd; // real launch dir → used to name the project by its git repo
 
     if (obj.type === 'ai-title' && obj.aiTitle) {
       title = obj.aiTitle.trim() || title; // keep the latest title in the file
@@ -91,7 +111,7 @@ export function parseTranscript(filePath) {
   if (actions.length) {
     turns.push({ role: 'actions', text: 'Actions taken in this session:\n' + actions.slice(0, 100).join('\n'), ts: lastTs, session: sessionId });
   }
-  return { turns, title };
+  return { turns, title, cwd };
 }
 
 // Splits a long text into ~size-char windows with overlap.

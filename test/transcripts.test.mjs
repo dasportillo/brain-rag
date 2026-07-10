@@ -1,10 +1,10 @@
 // Unit tests for the parse/redact/chunk layer. Model-free (no embeddings) so `node --test` is fast.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, rmSync, mkdtempSync } from 'node:fs';
-import { join } from 'node:path';
+import { writeFileSync, rmSync, mkdtempSync, mkdirSync } from 'node:fs';
+import { join, basename } from 'node:path';
 import { tmpdir } from 'node:os';
-import { redact, chunkText, projectFromPath, parseTranscript } from '../transcripts.mjs';
+import { redact, chunkText, projectFromPath, parseTranscript, gitRootName } from '../transcripts.mjs';
 
 test('redact scrubs known secret shapes', () => {
   assert.match(redact('h eyJabcdefgh.ijklmnop.qrstuvwx z'), /\[JWT_REDACTED\]/);
@@ -36,6 +36,31 @@ test('chunkText: long text splits into overlapping windows', () => {
 test('projectFromPath strips the dashified user/project prefix', () => {
   const p = '/x/.claude/projects/-Users-me-project-my-project/s.jsonl';
   assert.equal(projectFromPath(p), 'my-project');
+});
+
+test('gitRootName names a project by its git repo, stable across subdirs', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'brain-repo-'));
+  mkdirSync(join(dir, '.git'));
+  mkdirSync(join(dir, 'src', 'domains'), { recursive: true });
+  assert.equal(gitRootName(dir), basename(dir), 'repo root → repo name');
+  assert.equal(gitRootName(join(dir, 'src', 'domains')), basename(dir), 'deep subdir maps back to the repo');
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('gitRootName falls back to the folder name when not in a repo', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'brain-norepo-'));
+  assert.equal(gitRootName(join(dir, 'sub')), 'sub');
+  assert.equal(gitRootName(null), null, 'no cwd → null (caller uses the path fallback)');
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('parseTranscript returns the session cwd', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'brain-cwd-'));
+  const f = join(dir, 's.jsonl');
+  writeFileSync(f, JSON.stringify({ type: 'user', cwd: '/Users/me/project/foo',
+    message: { role: 'user', content: 'hello there, a real user turn' }, timestamp: '2026-01-01', sessionId: 'z' }));
+  assert.equal(parseTranscript(f).cwd, '/Users/me/project/foo');
+  rmSync(dir, { recursive: true, force: true });
 });
 
 test('parseTranscript: roles, summary tagging, title, noise drop, actions trace', () => {

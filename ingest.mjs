@@ -16,7 +16,7 @@ import { readdirSync, statSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { openDb, vecToBlob, stats, diffChunks } from './store.mjs';
-import { parseTranscript, projectFromPath, chunkText, redact } from './transcripts.mjs';
+import { parseTranscript, projectFromPath, gitRootName, chunkText, redact } from './transcripts.mjs';
 
 const PROJECTS = join(homedir(), '.claude', 'projects');
 
@@ -79,8 +79,10 @@ for (const file of files) {
   const prev = getSession.get(file);
   if (!FORCE && prev && prev.mtime === mtime && prev.bytes === st.size) { skipped++; continue; }
 
-  const project = projectFromPath(file);
-  const { turns, title } = parseTranscript(file);
+  const { turns, title, cwd } = parseTranscript(file);
+  // Project = the git repo the session ran in (stable across subdirs / OS / folder layout).
+  // Fall back to the dashified path only when the transcript has no cwd (older transcripts).
+  const project = (cwd && gitRootName(cwd)) || projectFromPath(file);
   // compaction summaries are progressive (each recaps everything so far); keep only the LAST,
   // the most complete one, so several near-duplicate summaries don't flood retrieval.
   const lastSummaryIdx = turns.map(t => t.role).lastIndexOf('summary');

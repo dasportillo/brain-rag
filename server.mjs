@@ -7,6 +7,7 @@ import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, rea
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { openDb, searchChunks, listProjects, canonicalProject, BRAIN_DIR } from './store.mjs';
+import { gitRootName } from './transcripts.mjs';
 import { embedOne } from './embed.mjs';
 
 const db = openDb();
@@ -16,7 +17,7 @@ const db = openDb();
 const clip = (t, n) => (t && t.length > n) ? t.slice(0, n).trimEnd() + ` … [+${t.length - n} chars]` : t;
 
 const server = new McpServer(
-  { name: 'brain', version: '0.2.0' },
+  { name: 'brain', version: '0.3.0' },
   {
     instructions: [
       "This server is the user's \"second brain\": persistent memory of all their work",
@@ -47,10 +48,9 @@ const server = new McpServer(
   }
 );
 
-// Auto-detect the current project from the cwd (same dashification Claude Code uses).
+// The current session's project = the git repo of the cwd (matches how ingest names projects).
 function currentProject() {
-  const dashed = '-' + process.cwd().replace(/^\//, '').replace(/\//g, '-');
-  return dashed.replace(/^-Users-[^-]+-project-/, '').replace(/^-+/, '');
+  return gitRootName(process.cwd());
 }
 
 server.tool(
