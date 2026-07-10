@@ -9,6 +9,7 @@ switch (cmd) {
   case 'ingest':       await import('./ingest.mjs'); break;             // index opted-in transcripts
   case 'import':       await import('./import.mjs'); break;             // backfill existing transcripts
   case 'forget':       await import('./forget.mjs'); break;             // remove sessions from the index
+  case 'relabel':      await import('./relabel.mjs'); break;            // re-derive project names by git repo (no re-embed)
   case 'stats':        process.argv.push('--stats'); await import('./ingest.mjs'); break;
   case 'search':       await import('./search.mjs'); break;             // CLI search
   case 'state':        await import('./state.mjs'); break;              // dump a project's recent activity
@@ -27,6 +28,7 @@ Usage: brain-rag <command>
   ingest          Ingest opted-in transcripts into the index
   import [filter] Backfill EXISTING conversations into the brain (--dry to preview)
   forget <filter> Remove matching sessions from the index + keep.list (--all, --dry)
+  relabel         Re-derive project names from each session's git repo (no re-embed; --dry)
   stats           Print index status
   search "query"  Search the brain from the CLI
   state [project] Dump a project's recent activity (raw material for /state)

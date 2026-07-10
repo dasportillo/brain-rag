@@ -87,7 +87,8 @@ claude mcp add brain --scope user -- npx -y brain-rag serve
 ```
 
 The `brain-rag` CLI also exposes `import` (backfill past conversations), `forget` (remove sessions
-from the index), `ingest`, `search`, `stats`, and `state` (`brain-rag help`).
+from the index), `relabel` (re-derive project names by git repo after upgrading), `ingest`,
+`search`, `stats`, and `state` (`brain-rag help`).
 
 **Import your existing conversations.** The brain is opt-in, so past chats aren't indexed until you
 bring them in:
@@ -169,16 +170,18 @@ notes are gitignored — they contain your work details.
 
 ### Project aliases (`aliases.json`)
 
-The same project's work often ends up fragmented across several indexed names — a workspace path
-(`efy3`) versus its per-service subfolders (`efy3-efy-experience`, `efy3-efy3-users`). An **optional**
-`~/.claude/brain/aliases.json` (see [`aliases.example.json`](aliases.example.json)) merges those
-fragments into one **canonical** project:
+A project is named by its **git repo** (the repo the session's cwd lives in), so the same repo is one
+project no matter which subdirectory Claude was launched in. That removes most fragmentation on its
+own. What it deliberately does *not* do is merge **separate repos** that you think of as one product
+(e.g. an `efy3` workspace of 15 independent service repos) — no heuristic gets that right for
+everyone, so it's left as opt-in. An **optional** `~/.claude/brain/aliases.json` (see
+[`aliases.example.json`](aliases.example.json)) merges those repos into one **canonical** project:
 
 ```json
-{ "efy3": ["efy3-efy-experience", "efy3-efy3-users", "efy3-efy-transactions"] }
+{ "efy3": ["efy3-users", "efy3-bff", "ledger-core", "efy-transactions"] }
 ```
 
-Each key is the canonical name; its array lists the raw names (as shown by `list_projects` /
+Each key is the canonical name; its array lists the repo names (as shown by `list_projects` /
 `brain-rag list`) that fold into it. With this in place:
 
 - **`list_projects`** collapses the fragments into a single row (summed counts, newest activity);

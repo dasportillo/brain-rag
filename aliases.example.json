@@ -1,8 +1,9 @@
 {
-  "_comment": "OPTIONAL. Copy to ~/.claude/brain/aliases.json to merge fragmented project names into one canonical project. Each key is the canonical name; its array lists the raw project names (as shown by `brain-rag list` / list_projects) that should fold into it. Absent or malformed => no aliasing (identity). It affects list_projects, search filtering, and get_state/save_state (which read/write state/<canonical>.md). Do NOT merge in a project whose sessions are off-topic (e.g. a tool built inside another repo's workspace) — that re-introduces contamination.",
+  "_comment": "OPTIONAL. Projects are already named by their git repo, so single repos don't fragment. Use this only to merge SEPARATE repos you think of as one product (e.g. a multi-repo workspace) into one canonical project. Each key is the canonical name; its array lists the repo names (as shown by `brain-rag list` / list_projects) that should fold into it. Absent or malformed => no aliasing (identity). It affects list_projects, search filtering, and get_state/save_state (which read/write state/<canonical>.md). Do NOT merge in a repo whose sessions are off-topic — that re-introduces contamination.",
   "efy3": [
-    "efy3-efy-experience",
-    "efy3-efy3-users",
-    "efy3-efy-transactions"
+    "efy3-users",
+    "efy3-bff",
+    "ledger-core",
+    "efy-transactions"
   ]
 }
