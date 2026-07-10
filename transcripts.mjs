@@ -32,19 +32,36 @@ export function redact(text) {
     .replace(/(password|passwd|secret|token|api[_-]?key|access[_-]?key)\b(["'\s]*[:=]["'\s]*)[^\s"'`]{6,}/gi, '$1$2[SECRET_REDACTED]'); // KEY=value / KEY: value (also DB_PASSWORD=…)
 }
 
+// A compact, low-noise descriptor of a tool call: "ToolName: <command|file|pattern|url|query>".
+// It turns raw tool_use blocks into a searchable trace of what was DONE, without pulling in full
+// tool inputs (which are huge and may contain secrets — redaction still runs on the result at ingest).
+function toolAction(block) {
+  const name = block.name || 'tool';
+  const inp = block.input || {};
+  const desc = inp.command || inp.file_path || inp.path || inp.pattern || inp.url || inp.query || inp.description || '';
+  const d = String(desc).replace(/\s+/g, ' ').trim().slice(0, 100);
+  return d ? `${name}: ${d}` : name;
+}
+
 // Reads a transcript once and returns { turns, title }:
-//   turns  — the useful turns (user + assistant text), plus context-compaction summaries
-//            tagged role 'summary' (they are system-written recaps, not the user's words).
+//   turns  — user + assistant text; context-compaction summaries tagged role 'summary'; and one
+//            role 'actions' turn per session — a compact trace of tool calls (files/commands/searches).
 //   title  — the session's ai-title ("what this session was about"), or null.
-// Noise (command wrappers, harness reminders) is dropped.
+// Noise (command wrappers, harness reminders) and raw `thinking` blocks are dropped.
 export function parseTranscript(filePath) {
   const content = readFileSync(filePath, 'utf8');
   const turns = [];
   let title = null;
+  const actions = [];
+  const seenAction = new Set();
+  let lastTs = null, sessionId = null;
+
   for (const line of content.split('\n')) {
     if (!line.trim()) continue;
     let obj;
     try { obj = JSON.parse(line); } catch { continue; }
+    if (obj.sessionId) sessionId = obj.sessionId;
+    if (obj.timestamp) lastTs = obj.timestamp;
 
     if (obj.type === 'ai-title' && obj.aiTitle) {
       title = obj.aiTitle.trim() || title; // keep the latest title in the file
@@ -55,14 +72,24 @@ export function parseTranscript(filePath) {
       const role = obj.isCompactSummary ? 'summary' : 'user';
       turns.push({ role, text, ts: obj.timestamp ?? null, session: obj.sessionId ?? null });
     } else if (obj.type === 'assistant' && obj.message && Array.isArray(obj.message.content)) {
-      const text = obj.message.content
+      const blocks = obj.message.content;
+      const text = blocks
         .filter(b => b && b.type === 'text' && b.text)
         .map(b => b.text)
         .join('\n')
         .trim();
-      if (!text) continue;
-      turns.push({ role: 'assistant', text, ts: obj.timestamp ?? null, session: obj.sessionId ?? null });
+      if (text) turns.push({ role: 'assistant', text, ts: obj.timestamp ?? null, session: obj.sessionId ?? null });
+      // accumulate the tool calls (what was done) into a per-session action trace
+      for (const b of blocks) {
+        if (!b || b.type !== 'tool_use') continue;
+        const a = toolAction(b);
+        if (!seenAction.has(a)) { seenAction.add(a); actions.push(a); }
+      }
     }
+  }
+  // one compact "actions" turn per session — high-signal for "what did we do", low bloat (deduped, capped).
+  if (actions.length) {
+    turns.push({ role: 'actions', text: 'Actions taken in this session:\n' + actions.slice(0, 100).join('\n'), ts: lastTs, session: sessionId });
   }
   return { turns, title };
 }
