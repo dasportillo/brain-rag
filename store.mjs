@@ -4,12 +4,38 @@
 import './quiet.mjs'; // silence node:sqlite's ExperimentalWarning — must run before node:sqlite loads
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, existsSync } from 'node:fs';
 // Loaded dynamically (after quiet.mjs) so the experimental warning is suppressed for every entry point.
 const { DatabaseSync } = await import('node:sqlite');
 
 export const BRAIN_DIR = process.env.BRAIN_DIR || join(homedir(), '.claude', 'brain');
 const DB_PATH = process.env.BRAIN_DB || join(BRAIN_DIR, 'brain.db');
+
+// PROJECT ALIASES (optional): merge fragmented project names into one canonical project so
+// list_projects / search / get_state treat e.g. efy3, efy3-efy-experience, efy3-efy3-users as ONE.
+// Format of ~/.claude/brain/aliases.json:  { "<canonical>": ["<memberFragment>", ...] }
+// Absent or malformed file => identity mapping (zero behavior change). See aliases.example.json.
+const ALIAS_PATH = process.env.BRAIN_ALIASES || join(BRAIN_DIR, 'aliases.json');
+let ALIASES = {};
+try { if (existsSync(ALIAS_PATH)) ALIASES = JSON.parse(readFileSync(ALIAS_PATH, 'utf8')); }
+catch (e) { ALIASES = {}; console.error(`brain: ignoring malformed ${ALIAS_PATH} (${e.message})`); } // stderr: safe for MCP stdio + CLI
+const _memberToCanon = new Map();
+for (const [canon, members] of Object.entries(ALIASES)) {
+  _memberToCanon.set(canon, canon);
+  if (Array.isArray(members)) for (const m of members) _memberToCanon.set(m, canon);
+}
+// Raw project name -> its canonical name (itself if not aliased).
+export function canonicalProject(name) {
+  return name ? (_memberToCanon.get(name) || name) : name;
+}
+// Every raw project name that shares `name`'s canonical (incl. itself) — for expanding a filter.
+export function aliasMembers(name) {
+  if (!name) return []; // never feed an empty/undefined name into an `IN (...)` expansion
+  const canon = canonicalProject(name);
+  const out = new Set([name, canon]);
+  if (Array.isArray(ALIASES[canon])) for (const m of ALIASES[canon]) out.add(m);
+  return [...out];
+}
 
 export function openDb() {
   mkdirSync(BRAIN_DIR, { recursive: true });
@@ -71,13 +97,18 @@ function tokenize(q) {
 export function searchChunks(db, qvec, { project = null, k = 8, since = null, recencyBoost = 0.05, queryText = null } = {}) {
   let sql = 'SELECT project, session, ts, role, text, embedding FROM chunks WHERE embedding IS NOT NULL';
   const params = [];
-  if (project) { sql += ' AND project = ?'; params.push(project); }
+  if (project) {
+    // expand the filter to every raw project name sharing this project's canonical (alias-aware)
+    const members = aliasMembers(project);
+    sql += ` AND project IN (${members.map(() => '?').join(',')})`;
+    params.push(...members);
+  }
   if (since)   { sql += ' AND ts >= ?';     params.push(since); }
   const rows = db.prepare(sql).all(...params);
 
   const now = Date.now();
   const recency = (ts) => (recencyBoost && ts) ? recencyBoost * Math.exp(-((now - Date.parse(ts)) / 86400000) / 45) : 0;
-  const cand = rows.map((r, i) => ({ i, r, sim: dot(qvec, blobToVec(r.embedding)), lc: r.text.toLowerCase() }));
+  const cand = rows.map((r, i) => { const vec = blobToVec(r.embedding); return { i, r, vec, sim: dot(qvec, vec), lc: r.text.toLowerCase() }; });
 
   const terms = queryText ? tokenize(queryText) : [];
   let scored;
@@ -96,9 +127,9 @@ export function searchChunks(db, qvec, { project = null, k = 8, since = null, re
     fuse(cand.filter(c => c.lex > 0).sort((a, b) => b.lex - a.lex));    // lexical ranking
     // recency as a third signal (half weight ⇒ worth at most ~half a vector rank; never dominates)
     if (recencyBoost) fuse(cand.filter(c => c.r.ts).sort((a, b) => Date.parse(b.r.ts) - Date.parse(a.r.ts)), REC_W);
-    scored = cand.map(c => ({ project: c.r.project, session: c.r.session, ts: c.r.ts, role: c.r.role, text: c.r.text, score: rrf.get(c.i) || 0, sim: c.sim }));
+    scored = cand.map(c => ({ project: c.r.project, session: c.r.session, ts: c.r.ts, role: c.r.role, text: c.r.text, score: rrf.get(c.i) || 0, sim: c.sim, _vec: c.vec }));
   } else {
-    scored = cand.map(c => ({ project: c.r.project, session: c.r.session, ts: c.r.ts, role: c.r.role, text: c.r.text, score: c.sim + recency(c.r.ts), sim: c.sim }));
+    scored = cand.map(c => ({ project: c.r.project, session: c.r.session, ts: c.r.ts, role: c.r.role, text: c.r.text, score: c.sim + recency(c.r.ts), sim: c.sim, _vec: c.vec }));
   }
 
   scored.sort((a, b) => b.score - a.score);
@@ -111,11 +142,29 @@ export function searchChunks(db, qvec, { project = null, k = 8, since = null, re
     out.push(s);
     if (out.length >= k) break;
   }
+  // TEMPORAL VERSION SIGNAL: within the returned set, flag results that are near-duplicate in TOPIC
+  // (mutual cosine ≥ VSIM) but from DIFFERENT dates — i.e. the same thing at different points in time,
+  // which is exactly the "old plan vs final plan" ambiguity. We never drop a result (recall is
+  // preserved); we only annotate, so the reader knows a newer version exists instead of inferring it.
+  const VSIM = 0.92, day = (ts) => (ts ? ts.slice(0, 10) : null);
+  for (let a = 0; a < out.length; a++) {
+    for (let b = a + 1; b < out.length; b++) {
+      const A = out[a], B = out[b];
+      if (!A._vec || !B._vec || !A.ts || !B.ts || day(A.ts) === day(B.ts)) continue;
+      if (dot(A._vec, B._vec) < VSIM) continue;
+      const [older, newer] = Date.parse(A.ts) <= Date.parse(B.ts) ? [A, B] : [B, A];
+      if (!older.outdatedBy || day(newer.ts) > older.outdatedBy) older.outdatedBy = day(newer.ts);
+      const od = day(older.ts);
+      newer.supersedes ||= [];
+      if (!newer.supersedes.includes(od)) newer.supersedes.push(od); // dedup: two older chunks can share a date
+    }
+  }
   // attach the session title (ai-title) to each hit — cheap, only for the k results.
   const titleQ = db.prepare('SELECT title FROM sessions WHERE session = ? AND title IS NOT NULL LIMIT 1');
   for (const s of out) {
     const row = s.session ? titleQ.get(s.session) : null;
     if (row?.title) s.title = row.title;
+    delete s._vec; // internal only — don't leak the embedding array to callers
   }
   return out;
 }
@@ -132,13 +181,25 @@ export function diffChunks(existingRows, records) {
 }
 
 export function listProjects(db) {
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT project,
            COUNT(DISTINCT session) AS sessions,
            COUNT(*)                AS chunks,
            MAX(ts)                 AS last_activity
-    FROM chunks GROUP BY project ORDER BY last_activity DESC
+    FROM chunks GROUP BY project
   `).all();
+  // Merge alias members into their canonical project. With no aliases this is a 1:1 pass-through,
+  // so the output is identical to the plain GROUP BY (each project is its own canonical).
+  const merged = new Map();
+  for (const r of rows) {
+    const canon = canonicalProject(r.project);
+    const cur = merged.get(canon) || { project: canon, sessions: 0, chunks: 0, last_activity: null };
+    cur.sessions += r.sessions;
+    cur.chunks += r.chunks;
+    if (r.last_activity && (!cur.last_activity || r.last_activity > cur.last_activity)) cur.last_activity = r.last_activity;
+    merged.set(canon, cur);
+  }
+  return [...merged.values()].sort((a, b) => (b.last_activity || '').localeCompare(a.last_activity || ''));
 }
 
 export function stats(db) {

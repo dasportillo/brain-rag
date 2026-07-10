@@ -17,8 +17,11 @@ const qvec = await embedOne(query);
 const hits = searchChunks(db, qvec, { project, k: 8, queryText: query });
 
 console.log(`\n🔎 "${query}"${project ? ` [${project}]` : ''}\n`);
+const versionNote = (h) => h.outdatedBy
+  ? `  ⚠️ superseded → newer on ${h.outdatedBy}`
+  : (h.supersedes?.length ? `  ✅ latest of ${new Set(h.supersedes).size + 1} (older: ${[...new Set(h.supersedes)].join(', ')})` : '');
 for (const h of hits) {
   const when = h.ts ? h.ts.slice(0, 10) : '?';
-  console.log(`[${h.score.toFixed(3)}] ${h.project} · ${when} · ${h.role}${h.title ? ` · "${h.title}"` : ''}`);
+  console.log(`[${h.score.toFixed(3)}] ${h.project} · ${when} · ${h.role}${h.title ? ` · "${h.title}"` : ''}${versionNote(h)}`);
   console.log(`   ${h.text.replace(/\s+/g, ' ').slice(0, 220)}\n`);
 }
