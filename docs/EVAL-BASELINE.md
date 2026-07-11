@@ -9,6 +9,18 @@ Update this table in every retrieval-touching PR (`node eval.mjs 8 --json`).
 | 2026-07-11 | 0.5.0 + 30 cases, Codex corpus | 30 | 560 / 30,792 | 0.77 | 0.93 | 0.97 | 0.819 | 0.854 | 435 / 527 ms | 8.4 kB |
 | 2026-07-11 | 0.7.0 hybrid: FTS5/BM25 + RRF | 30 | 560 / 30,792 | 0.73 | 0.97 | 0.97 | 0.828 | 0.863 | 91 / 102 ms | 6.9 kB |
 | 2026-07-11 | 0.8.1 + 123-case eval | 123 | 560 / 30,802 | 0.59 | 0.79 | 0.85 | 0.674 | 0.715 | 90 / 105 ms | 6.2 kB |
+| 2026-07-11 | 1.0.0 hybrid (default path) | 123 | 560 / 30,802 | 0.59 | 0.80 | 0.85 | 0.676 | 0.718 | 92 / 107 ms | 6.2 kB |
+| 2026-07-11 | 1.0.0 `--rerank` (opt-in) | 123 | 560 / 30,802 | **0.76** | **0.85** | **0.86** | **0.798** | **0.814** | 1060 / 1241 ms | 6.2 kB |
+
+Notes on the 1.0.0 rows (reranker gate — SHIPPED):
+
+- The opt-in cross-encoder pass (`jinaai/jina-reranker-v2-base-multilingual`, ONNX q8) was the
+  measured gate for the v1.0 reranker: **R@1 0.59 → 0.76 (+17 pp), MRR 0.676 → 0.798,
+  nDCG@8 0.718 → 0.814**, and the cross-lingual target slice (lang:en over ES content) 38→40/48.
+  One minor slice regression (entity 8→7/11). p95 1241 ms is the *opt-in* cost — the default
+  path is byte-identical to 0.8.1 (row above; ±0.01 run-to-run noise) and stays at ~100 ms.
+- Usage: `search_context({rerank: true})` for cross-language queries or should-exist retries;
+  `node eval.mjs 8 --rerank` reproduces the measurement (warmup query excluded from latencies).
 
 Notes on the 0.8.1 row (case set 30 → 123):
 
