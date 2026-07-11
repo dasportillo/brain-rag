@@ -69,6 +69,16 @@ test('FTS5 leg rescues an exact term the vector misses, accent- and underscore-i
   assert.equal(res[0].session, 's4', 'lexical exact-term match outranks the higher-cosine chunk');
 });
 
+test('role filter narrows both legs', () => {
+  // same project, same vocabulary, different roles — only the actions turn must come back
+  insC.run('/p/s6.jsonl', 'roleproj', 's6', '2026-03-01', 'assistant', 'deploying the tariff engine step by step', vecToBlob(vec(1, 0)));
+  insC.run('/p/s6.jsonl', 'roleproj', 's6', '2026-03-01', 'actions', 'Actions taken: deploy tariff engine via terraform apply', vecToBlob(vec(0.9, 0.436)));
+  const res = searchChunks(db, vec(1, 0), { k: 5, project: 'roleproj', queryText: 'tariff engine deploy', role: 'actions', recencyBoost: 0 });
+  assert.equal(res.length, 1);
+  assert.equal(res[0].role, 'actions');
+  db.exec("DELETE FROM chunks WHERE project = 'roleproj'");
+});
+
 test("mode: 'semantic' ignores the lexical leg (pure cosine order)", () => {
   const res = searchChunks(db, vec(1, 0), { k: 2, project: 'lexproj', queryText: 'auditoria montos_fijos', mode: 'semantic', recencyBoost: 0 });
   assert.equal(res[0].session, 's5');

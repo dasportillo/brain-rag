@@ -41,7 +41,7 @@ const server = new McpServer(
       'TOOLS: get_state(project?) = curated "where I am today"; if no note exists it returns recent activity (NOT curated) — synthesize + save_state to persist.',
       'save_state(content, project?) = write/refresh that curated note (overwrites; drop reverted decisions).',
       'keep_session() = save THIS conversation to the brain (call proactively when it is worth remembering).',
-      'search_context(query, project?, since?) = searches the WHOLE history. list_projects() = what is indexed and how fresh.',
+      'search_context(query, project?, since?, role?) = searches the WHOLE history (hybrid: semantic + exact-term). Put exact identifiers in the query verbatim — they match lexically. role:"summary" finds dense session recaps; role:"actions" finds what was done (commands/files).',
       '',
       'NAME GOTCHA: the cwd is "dashified" (new_test -> new-test). If get_state finds nothing,',
       'run list_projects to get the exact name and retry.',
@@ -58,14 +58,15 @@ server.tool(
   'search_context',
   'Searches the history of work conversations (all projects). Returns the most relevant chunks with project/date. USE IT when the user asks "what did we decide about X?", "how did I solve Y?", "what did we do with Z?", "search the brain for…", or before assuming there is no prior context on a topic. Recovers past decisions and work.',
   {
-    query: z.string().describe('what to search for, in natural language'),
+    query: z.string().describe('what to search for, in natural language; INCLUDE exact identifiers verbatim (error strings, function names, ARNs) — the lexical leg matches them precisely'),
     project: z.string().optional().describe('filter to one project; omit to search all'),
     k: z.number().optional().describe('number of results (default 8)'),
     since: z.string().optional().describe('minimum ISO date, e.g. 2026-06-01'),
+    role: z.enum(['user', 'assistant', 'summary', 'actions']).optional().describe("filter by turn type: 'summary' = compaction recaps (dense session overviews), 'actions' = commands/files touched, 'user'/'assistant' = the conversation itself"),
   },
-  async ({ query, project, k = 8, since }) => {
+  async ({ query, project, k = 8, since, role }) => {
     const qvec = await embedOne(query);
-    const hits = searchChunks(db, qvec, { project: project ?? null, k, since: since ?? null, queryText: query });
+    const hits = searchChunks(db, qvec, { project: project ?? null, k, since: since ?? null, queryText: query, role: role ?? null });
     // Temporal-version signal: warn when a hit has a newer near-duplicate, or mark the latest of a set.
     const versionNote = (h) => h.outdatedBy
       ? ` · ⚠️ SUPERSEDED — newer related entry on ${h.outdatedBy}`
