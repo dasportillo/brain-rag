@@ -1,40 +1,34 @@
-// Backfill EXISTING Claude Code transcripts into the brain: opt them into keep.list, then ingest.
-// The brain is opt-in, so past conversations aren't indexed until you import them.
+// Backfill EXISTING conversations (Claude Code transcripts + Codex rollouts) into the brain:
+// opt them into keep.list, then ingest. The brain is opt-in, so past conversations aren't
+// indexed until you import them.
 //   brain-rag import            # import ALL previous conversations
 //   brain-rag import <filter>   # only paths/projects matching <filter> (substring)
 //   brain-rag import --dry      # preview what would be imported — writes nothing, embeds nothing
-import { readdirSync, readFileSync, existsSync, appendFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, existsSync, appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { walkJsonl, codexHeadCwd, gitRootName, CLAUDE_PROJECTS, CODEX_SESSIONS } from './transcripts.mjs';
 
 const args = process.argv.slice(2);
 const DRY = args.includes('--dry');
 const filter = args.find(a => !a.startsWith('--')) || null;
 
-const PROJECTS = join(homedir(), '.claude', 'projects');
 const BRAIN_DIR = process.env.BRAIN_DIR || join(homedir(), '.claude', 'brain');
 const KEEP = join(BRAIN_DIR, 'keep.list');
 
-function walk(dir) {
-  const out = [];
-  if (!existsSync(dir)) return out;
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    const p = join(dir, e.name);
-    if (e.isDirectory()) out.push(...walk(p));
-    else if (e.name.endsWith('.jsonl')) out.push(p);
-  }
-  return out;
-}
+// Grouping label: Claude → the dashified project dir; Codex → the repo of the rollout's
+// recorded cwd (read from the file head, no full parse).
+const projOf = (f) => f.match(/\/projects\/([^/]+)\//)?.[1]
+  || (f.startsWith(CODEX_SESSIONS) ? `${gitRootName(codexHeadCwd(f)) ?? '?'} (codex)` : '?');
 
-let files = walk(PROJECTS);
-if (filter) files = files.filter(f => f.includes(filter));
+let files = [...walkJsonl(CLAUDE_PROJECTS), ...walkJsonl(CODEX_SESSIONS)];
+// Codex rollout paths are date/uuid-named, so match the filter against the project label too.
+if (filter) files = files.filter(f => f.includes(filter) || projOf(f).includes(filter));
 
 if (!files.length) {
-  console.log(`No transcripts${filter ? ` matching "${filter}"` : ''} found under ${PROJECTS}.`);
+  console.log(`No transcripts${filter ? ` matching "${filter}"` : ''} found under ${CLAUDE_PROJECTS} or ${CODEX_SESSIONS}.`);
   process.exit(0);
 }
-
-const projOf = (f) => f.match(/\/projects\/([^/]+)\//)?.[1] || '?';
 const byProj = {};
 for (const f of files) byProj[projOf(f)] = (byProj[projOf(f)] || 0) + 1;
 const existing = new Set(existsSync(KEEP) ? readFileSync(KEEP, 'utf8').split('\n').map(s => s.trim()).filter(Boolean) : []);

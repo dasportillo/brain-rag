@@ -1,6 +1,14 @@
-// Parse, chunk, and redact Claude Code .jsonl transcripts.
-import { readFileSync, existsSync } from 'node:fs';
+// Parse, chunk, and redact session transcripts from both hosts:
+//   - Claude Code project transcripts (~/.claude/projects/**/*.jsonl)
+//   - Codex session rollouts        (~/.codex/sessions/**/rollout-*.jsonl)
+// Both normalize to the same { turns, title, cwd } shape, so everything downstream
+// (chunking, redaction, embeddings, store) is host-agnostic.
+import { readFileSync, existsSync, readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { dirname, basename, join } from 'node:path';
+import { homedir } from 'node:os';
+
+export const CLAUDE_PROJECTS = join(homedir(), '.claude', 'projects');
+export const CODEX_SESSIONS = join(homedir(), '.codex', 'sessions');
 
 // FALLBACK project name, from the dashified directory Claude Code uses:
 //   /Users/x/.claude/projects/-Users-you-project-my-project/<sess>.jsonl
@@ -57,7 +65,7 @@ export function redact(text) {
 function toolAction(block) {
   const name = block.name || 'tool';
   const inp = block.input || {};
-  const desc = inp.command || inp.file_path || inp.path || inp.pattern || inp.url || inp.query || inp.description || '';
+  const desc = inp.command || inp.cmd || inp.file_path || inp.path || inp.pattern || inp.url || inp.query || inp.description || '';
   const d = String(desc).replace(/\s+/g, ' ').trim().slice(0, 100);
   return d ? `${name}: ${d}` : name;
 }
@@ -112,6 +120,153 @@ export function parseTranscript(filePath) {
     turns.push({ role: 'actions', text: 'Actions taken in this session:\n' + actions.slice(0, 100).join('\n'), ts: lastTs, session: sessionId });
   }
   return { turns, title, cwd };
+}
+
+// ---------------------------------------------------------------------------
+// Codex rollouts (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl)
+// ---------------------------------------------------------------------------
+
+// Codex-injected user-role items that are NOT the user's words (harness config, env dumps).
+function isCodexNoise(text) {
+  const t = text.trimStart();
+  return /^<(turn_aborted|environment_context|user_instructions|permissions|subagent_notification|\/?image)/.test(t)
+    || t.startsWith('# AGENTS.md instructions')
+    || t.startsWith('# Context from my IDE setup');
+}
+
+// Codex has no in-file title; ~/.codex/session_index.jsonl maps session id -> thread_name.
+// Loaded lazily ONCE per process (ingest parses many rollouts in a row).
+let codexTitles = null;
+function codexTitle(sessionId, indexPath = join(homedir(), '.codex', 'session_index.jsonl')) {
+  if (!sessionId) return null;
+  if (!codexTitles) {
+    codexTitles = new Map();
+    if (existsSync(indexPath)) {
+      for (const line of readFileSync(indexPath, 'utf8').split('\n')) {
+        if (!line.trim()) continue;
+        try {
+          const o = JSON.parse(line);
+          if (o.id && o.thread_name) codexTitles.set(o.id, o.thread_name);
+        } catch { /* skip bad line */ }
+      }
+    }
+  }
+  return codexTitles.get(sessionId) ?? null;
+}
+
+// First bytes of a file without reading it whole (rollout first lines embed the full
+// base_instructions blob, and discovery may probe many files).
+function fileHead(filePath, n = 2048) {
+  const fd = openSync(filePath, 'r');
+  try {
+    const buf = Buffer.alloc(n);
+    const read = readSync(fd, buf, 0, n, 0);
+    return buf.toString('utf8', 0, read);
+  } finally { closeSync(fd); }
+}
+
+// A rollout's first line is its session_meta — that's the format marker.
+export function isCodexRollout(filePath) {
+  return fileHead(filePath, 256).includes('"type":"session_meta"');
+}
+
+// The cwd of a Codex rollout without parsing the whole file: session_meta is always the
+// first line and cwd appears before the (huge) base_instructions blob.
+export function codexHeadCwd(filePath) {
+  const m = fileHead(filePath).match(/"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  if (!m) return null;
+  try { return JSON.parse(`"${m[1]}"`); } catch { return null; }
+}
+
+// Codex counterpart of parseTranscript — same { turns, title, cwd } shape.
+// Only response_item lines are read: event_msg lines duplicate them for the UI, and
+// role 'developer' items are harness config, not conversation.
+export function parseCodexRollout(filePath) {
+  const content = readFileSync(filePath, 'utf8');
+  const turns = [];
+  const actions = [];
+  const seenAction = new Set();
+  let cwd = null, sessionId = null, lastTs = null;
+
+  for (const line of content.split('\n')) {
+    if (!line.trim()) continue;
+    let obj;
+    try { obj = JSON.parse(line); } catch { continue; }
+    const ts = obj.timestamp ?? null;
+    if (ts) lastTs = ts;
+    const p = obj.payload || {};
+
+    if (obj.type === 'session_meta') {
+      if (!cwd && p.cwd) cwd = p.cwd;
+      if (!sessionId && (p.id || p.session_id)) sessionId = p.id || p.session_id;
+    } else if (obj.type === 'response_item' && p.type === 'message') {
+      if (p.role !== 'user' && p.role !== 'assistant') continue;
+      const text = (Array.isArray(p.content) ? p.content : [])
+        .filter(c => c && (c.type === 'input_text' || c.type === 'output_text') && c.text)
+        .map(c => c.text).join('\n').trim();
+      if (!text) continue;
+      if (p.role === 'user' && (isNoise(text) || isCodexNoise(text))) continue;
+      turns.push({ role: p.role, text, ts, session: sessionId });
+    } else if (obj.type === 'response_item' && p.type === 'function_call') {
+      let input = {};
+      try { input = JSON.parse(p.arguments || '{}'); } catch { /* keep name-only action */ }
+      const a = toolAction({ name: p.name, input });
+      if (!seenAction.has(a)) { seenAction.add(a); actions.push(a); }
+    } else if (obj.type === 'response_item' && p.type === 'custom_tool_call') {
+      const a = toolAction({ name: p.name, input: { description: p.input } });
+      if (!seenAction.has(a)) { seenAction.add(a); actions.push(a); }
+    } else if (obj.type === 'compacted' && typeof p.message === 'string' && p.message.trim()) {
+      // Codex compaction recap — same role as Claude's isCompactSummary turns.
+      turns.push({ role: 'summary', text: p.message.trim(), ts, session: sessionId });
+    }
+  }
+  if (actions.length) {
+    turns.push({ role: 'actions', text: 'Actions taken in this session:\n' + actions.slice(0, 100).join('\n'), ts: lastTs, session: sessionId });
+  }
+  return { turns, title: codexTitle(sessionId), cwd };
+}
+
+// One entry point for both formats: sniff the file, dispatch to the right parser.
+export function parseSession(filePath) {
+  return isCodexRollout(filePath) ? parseCodexRollout(filePath) : parseTranscript(filePath);
+}
+
+// All .jsonl transcripts under a root (either host's store); [] when the root doesn't exist.
+export function walkJsonl(dir) {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { withFileTypes: true }).flatMap(e => {
+    const p = join(dir, e.name);
+    return e.isDirectory() ? walkJsonl(p) : (e.name.endsWith('.jsonl') ? [p] : []);
+  });
+}
+
+// The transcript being written RIGHT NOW: the newest .jsonl across both hosts' stores,
+// preferring candidates that belong to this cwd so a busy parallel session in another
+// project doesn't steal the match. Used by keep_session and mark-current.
+export function findCurrentTranscript(cwd, { claudeRoot = CLAUDE_PROJECTS, codexRoot = CODEX_SESSIONS } = {}) {
+  // Claude nests transcripts under the dashified cwd; Codex records the cwd on the
+  // rollout's first line (probed newest-first, capped).
+  const projDir = join(claudeRoot, String(cwd).replace(/[/_]/g, '-'));
+  const claudeMatched = existsSync(projDir) ? walkJsonl(projDir) : [];
+  const codexByMtime = walkJsonl(codexRoot)
+    .map(f => ({ f, m: statSync(f).mtimeMs }))
+    .sort((a, b) => b.m - a.m)
+    .map(x => x.f);
+  const codexMatched = codexByMtime.slice(0, 200).filter(f => codexHeadCwd(f) === cwd);
+
+  const newest = (files) => {
+    let best = null, bestM = -1;
+    for (const f of files) {
+      const m = statSync(f).mtimeMs;
+      if (m > bestM) { bestM = m; best = f; }
+    }
+    return best;
+  };
+  // Prefer transcripts that provably belong to this cwd; only when NEITHER store can be
+  // matched (e.g. the MCP server was launched with an unrelated cwd) fall back to pure
+  // recency across everything. Null when neither store has transcripts at all.
+  return newest([...claudeMatched, ...codexMatched])
+    ?? newest([...walkJsonl(claudeRoot), ...codexByMtime]);
 }
 
 // Splits a long text into ~size-char windows with overlap.

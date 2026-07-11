@@ -12,13 +12,11 @@
 //   node ingest.mjs --no-embed    # only parse/chunk/store (fast, no model)
 //   node ingest.mjs --limit 5     # process up to 5 sessions (for testing)
 //   node ingest.mjs --stats       # print index status and exit
-import { readdirSync, statSync, readFileSync, existsSync } from 'node:fs';
+import { statSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { openDb, vecToBlob, stats, diffChunks } from './store.mjs';
-import { parseTranscript, projectFromPath, gitRootName, chunkText, redact } from './transcripts.mjs';
-
-const PROJECTS = join(homedir(), '.claude', 'projects');
+import { parseSession, projectFromPath, gitRootName, chunkText, redact, walkJsonl, CLAUDE_PROJECTS, CODEX_SESSIONS } from './transcripts.mjs';
 
 // OPT-IN: by default NOTHING is indexed. Only sessions whose transcript is listed in
 // keep.list get indexed. Entries are added by `BRAIN=1 claude` (the mark-keep.mjs
@@ -37,16 +35,6 @@ const LIMIT = Number(val('--limit', Infinity));
 const NO_EMBED = has('--no-embed');
 const FORCE = has('--force'); // re-process even if unchanged (e.g. to backfill embeddings)
 
-function findTranscripts(dir) {
-  const out = [];
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    const p = join(dir, e.name);
-    if (e.isDirectory()) out.push(...findTranscripts(p));
-    else if (e.name.endsWith('.jsonl')) out.push(p);
-  }
-  return out;
-}
-
 const db = openDb();
 
 if (has('--stats')) {
@@ -58,7 +46,8 @@ if (has('--stats')) {
 let embed = null;
 if (!NO_EMBED) ({ embed } = await import('./embed.mjs'));
 
-const files = findTranscripts(PROJECTS);
+// Both hosts' session stores; either may be absent (walkJsonl returns [] then).
+const files = [...walkJsonl(CLAUDE_PROJECTS), ...walkJsonl(CODEX_SESSIONS)];
 const getSession    = db.prepare('SELECT mtime, bytes FROM sessions WHERE path = ?');
 const delChunks     = db.prepare('DELETE FROM chunks WHERE path = ?');
 const delChunkById  = db.prepare('DELETE FROM chunks WHERE id = ?');
@@ -79,7 +68,7 @@ for (const file of files) {
   const prev = getSession.get(file);
   if (!FORCE && prev && prev.mtime === mtime && prev.bytes === st.size) { skipped++; continue; }
 
-  const { turns, title, cwd } = parseTranscript(file);
+  const { turns, title, cwd } = parseSession(file);
   // Project = the git repo the session ran in (stable across subdirs / OS / folder layout).
   // Fall back to the dashified path only when the transcript has no cwd (older transcripts).
   const project = (cwd && gitRootName(cwd)) || projectFromPath(file);

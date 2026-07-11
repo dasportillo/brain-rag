@@ -13,11 +13,11 @@ serve:   query → embed → cosine top-k → return
 ```
 
 Nothing leaves the machine. Embeddings are computed locally, the store is a local SQLite file, and
-the MCP server talks to Claude Code over stdio.
+the MCP server talks to Claude Code / Codex over stdio.
 
 ## The corpus
 
-Claude Code writes one `.jsonl` file per session under:
+Two sources, one index. Claude Code writes one `.jsonl` file per session under:
 
 ```
 ~/.claude/projects/<dashified-cwd>/<sessionId>.jsonl
@@ -42,7 +42,18 @@ and distil `tool_use` blocks into a compact per-session **actions trace** (role 
 is dropped as verbose/low-signal. User content that is an array (tool results) is skipped — that
 filters out most tool noise automatically.
 
-## Stage 1 — Parse (`transcripts.mjs::parseTranscript`)
+Codex writes one **rollout** per session under `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` — a
+different line schema (`session_meta` first line with the real `cwd`, then `response_item` lines for
+messages/`function_call`s, `event_msg` lines duplicating them for the UI, and `compacted` recaps).
+`transcripts.mjs::parseSession` sniffs the first line (`"type":"session_meta"` → rollout) and
+dispatches to the right parser; both normalize to the same `{ turns, title, cwd }`, so every stage
+below is host-agnostic. Codex-specific notes: `event_msg` lines and `role: "developer"` items are
+skipped (duplicates / harness config), harness-injected user items (`<environment_context>`,
+`<turn_aborted>`, AGENTS.md and IDE-context dumps) are dropped as noise, non-empty `compacted`
+messages become `role: "summary"` turns, and titles come from `~/.codex/session_index.jsonl`
+(`thread_name`, only present for named threads).
+
+## Stage 1 — Parse (`transcripts.mjs::parseTranscript` / `parseCodexRollout`)
 
 Reads the file once and returns `{ turns, title }`. Each turn is normalized to
 `{ role, text, ts, session }`; command wrappers and harness reminders (`<command-name>`,

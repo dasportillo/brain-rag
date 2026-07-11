@@ -5,7 +5,7 @@
 //   node relabel.mjs --dry   # show what would change, touch nothing
 import { existsSync } from 'node:fs';
 import { openDb } from './store.mjs';
-import { parseTranscript, projectFromPath, gitRootName } from './transcripts.mjs';
+import { parseSession, projectFromPath, gitRootName } from './transcripts.mjs';
 
 const DRY = process.argv.includes('--dry');
 const db = openDb();
@@ -19,7 +19,7 @@ const moves = new Map(); // "old → new" -> session count
 
 for (const { path, project } of sessions) {
   if (!existsSync(path)) { missing++; continue; } // transcript gone; leave as-is (ingest prunes it)
-  const { cwd } = parseTranscript(path);
+  const { cwd } = parseSession(path);
   const next = (cwd && gitRootName(cwd)) || projectFromPath(path);
   if (!next || next === project) continue;
   const key = `${project}  →  ${next}`;
