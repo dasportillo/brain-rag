@@ -65,17 +65,17 @@ search p95 stays under ~300 ms on the current corpus.
 > The core of v2. Distilled knowledge with full traceability back to the transcript lines that
 > produced it. Nothing is generated without evidence.
 
-- [ ] `memories` table: `id, type, project, title, content, confidence, status, valid_from,
+- [x] `memories` table: `id, type, project, title, content, confidence, status, valid_from,
       valid_until, supersedes, source_session, source_messages (JSON of transcript line uuids),
       entities (JSON), embedding, created_at, updated_at`. **One table** — the 16 memory types
       (`decision, fact, architecture, bug, solution, todo, question, meeting, preference, workflow,
       code_pattern, aws_resource, database, deployment, incident, learning`) are a controlled
       vocabulary + per-type JSON metadata, NOT 16 schemas. Specialize a type only when it earns it.
-- [ ] MCP tool `save_memories(memories[])`: batch write, type validation, embedding at write time.
-- [ ] Write-time **dedup/supersede**: candidate = same project+type with high cosine similarity;
+- [x] MCP tool `save_memories(memories[])`: batch write, type validation, embedding at write time.
+- [x] Write-time **dedup/supersede**: candidate = same project+type with high cosine similarity;
       conservative policy — exact-title match updates in place, explicit contradiction marks the
       old one `superseded` (linked via `supersedes`), anything uncertain creates new + links.
-- [ ] Retrieval integration: `search_context` gains `layer: memories|raw|both` (default `both`,
+- [x] Retrieval integration: `search_context` gains `layer: memories|raw|both` (default `both`,
       memories ranked above raw hits of equal relevance); `status=active` preferred, superseded
       flagged (generalizes the existing chunk-level temporal signal).
 - [ ] **Extraction at session end**: for opted-in sessions, SessionEnd hook → `brain-rag distill

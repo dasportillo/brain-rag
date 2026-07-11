@@ -1,6 +1,6 @@
 {
   "name": "brain-rag",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Local, private RAG second brain over your Claude Code & Codex transcripts, served back to both agents as an MCP server.",
   "type": "module",
   "bin": {

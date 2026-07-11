@@ -27,6 +27,7 @@ turns those hundreds of sessions into one recallable memory.
   - `list_projects()` — indexed projects with session/chunk counts and last activity.
   - `get_state({project?})` — curated "current state" note for a project (the precise layer).
   - `save_state({content, project?})` — write/refresh that curated note (overwrites; drops stale decisions).
+  - `save_memories({memories[]})` — write **distilled knowledge** (Layer 2): typed memories (decision/bug/solution/…) with provenance, refresh-by-title and explicit supersede. `search_context` surfaces them above raw history (`layer` param); `/distill` extracts them from the current conversation.
 - **Opt-in by default** — a session is saved only via `claude --brain`, the `/brain` command, or being listed in `keep.list`; a `SessionEnd` hook then incrementally re-indexes the sessions you opted in.
 
 ## Architecture

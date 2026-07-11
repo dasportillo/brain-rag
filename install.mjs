@@ -17,6 +17,16 @@ const CODEX_HOME = join(homedir(), '.codex');
 console.log(`▸ ${NAME} install (npx-native)\n  data dir: ${BRAIN_DIR}`);
 mkdirSync(BRAIN_DIR, { recursive: true });
 
+// Shared by the Claude Code slash command and the Codex custom prompt: in-session memory
+// extraction — the AGENT distills, the server just stores (see docs/ROADMAP.md, v0.8).
+const DISTILL_PROMPT = `Distill THIS conversation into durable memories and save them to the second brain.
+
+1. Review the conversation for knowledge worth keeping beyond this chat: decisions (with their WHY), bug root causes, solutions, architecture facts, preferences, workflows, lessons learned, open TODOs.
+2. For each one, build a SELF-CONTAINED memory (readable without the conversation): a short stable title, the fact + why + minimal context, the right type, entities it touches, and 1-2 short verbatim quotes from the conversation as source_messages.
+3. Call the \`save_memories\` tool from the \`brain\` MCP server with ALL of them in one batch (3-8 memories is typical; skip trivia and dead ends). If the response warns an existing memory is now outdated, save again with supersedes:<id>.
+4. Report one line per saved memory.
+`;
+
 // 1. Register the MCP server globally (idempotent).
 try {
   const list = execSync('claude mcp list', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
@@ -59,7 +69,8 @@ if (existsSync(CODEX_HOME)) {
 3. Call \`save_state\` with that Markdown (same project if one was given).
 4. Report the saved path on a single line.
 `);
-  console.log(`▸ installed Codex /brain and /state prompts → ${PROMPTS}`);
+  writeFileSync(join(PROMPTS, 'distill.md'), DISTILL_PROMPT);
+  console.log(`▸ installed Codex /brain, /state and /distill prompts → ${PROMPTS}`);
 
   console.log(`
 ▸ Codex tip — Codex doesn't surface MCP instructions as prominently as Claude Code; add a short
@@ -98,7 +109,11 @@ Build and persist the curated CURRENT-STATE note for the project \`$ARGUMENTS\` 
 3. Call the \`save_state\` tool with that Markdown (same project if one was given).
 4. Report the saved path on a single line.
 `);
-console.log(`▸ installed /brain and /state → ${CMD_DIR}`);
+writeFileSync(join(CMD_DIR, 'distill.md'), `---
+description: Distill THIS conversation into durable memories (Layer 2 of the second brain)
+---
+${DISTILL_PROMPT}`);
+console.log(`▸ installed /brain, /state and /distill → ${CMD_DIR}`);
 
 // 3. Hook wiring (printed — we don't edit settings.json for you). The brain is OPT-IN.
 console.log(`

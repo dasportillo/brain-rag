@@ -101,7 +101,57 @@ function migrate(db) {
       PRAGMA user_version = 1;
     `);
   }
+  if (version() < 2) {
+    // v2: Layer 2 — the MEMORY STORE. Distilled, traceable knowledge on top of the raw
+    // transcript archive: one row per durable fact/decision/solution, with provenance
+    // (source_session + source_messages) and a temporal status lifecycle. Same hybrid
+    // search design as chunks (embedding BLOB + external-content FTS5).
+    db.exec(`
+      BEGIN;
+      CREATE TABLE IF NOT EXISTS memories (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        type            TEXT NOT NULL,
+        project         TEXT NOT NULL,
+        title           TEXT NOT NULL,
+        content         TEXT NOT NULL,
+        confidence      REAL NOT NULL DEFAULT 0.8,
+        status          TEXT NOT NULL DEFAULT 'active',
+        valid_from      TEXT,
+        valid_until     TEXT,
+        supersedes      INTEGER,
+        source_session  TEXT,
+        source_messages TEXT,
+        entities        TEXT,
+        embedding       BLOB,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project);
+      CREATE INDEX IF NOT EXISTS idx_memories_status  ON memories(status);
+      CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+        title, content, content='memories', content_rowid='id',
+        tokenize="unicode61 remove_diacritics 2"
+      );
+      CREATE TRIGGER IF NOT EXISTS memories_fts_ai AFTER INSERT ON memories BEGIN
+        INSERT INTO memories_fts(rowid, title, content) VALUES (new.id, new.title, new.content);
+      END;
+      CREATE TRIGGER IF NOT EXISTS memories_fts_ad AFTER DELETE ON memories BEGIN
+        INSERT INTO memories_fts(memories_fts, rowid, title, content) VALUES('delete', old.id, old.title, old.content);
+      END;
+      CREATE TRIGGER IF NOT EXISTS memories_fts_au AFTER UPDATE OF title, content ON memories BEGIN
+        INSERT INTO memories_fts(memories_fts, rowid, title, content) VALUES('delete', old.id, old.title, old.content);
+        INSERT INTO memories_fts(rowid, title, content) VALUES (new.id, new.title, new.content);
+      END;
+      COMMIT;
+      PRAGMA user_version = 2;
+    `);
+  }
 }
+
+// Controlled vocabulary — one memories table, types as tags (NOT 16 schemas; see docs/ROADMAP.md).
+export const MEMORY_TYPES = ['decision', 'fact', 'architecture', 'bug', 'solution', 'todo', 'question',
+  'meeting', 'preference', 'workflow', 'code_pattern', 'aws_resource', 'database', 'deployment', 'incident', 'learning'];
+export const MEMORY_STATUSES = ['active', 'superseded', 'deprecated', 'experimental', 'obsolete'];
 
 // Float32Array -> BLOB and back
 export function vecToBlob(vec) {
@@ -302,6 +352,98 @@ export function stats(db) {
   const s = db.prepare('SELECT COUNT(*) n, COUNT(DISTINCT project) p FROM sessions').get();
   const c = db.prepare('SELECT COUNT(*) n, SUM(embedding IS NOT NULL) e FROM chunks').get();
   return { sessions: s.n, projects: s.p, chunks: c.n, embedded: c.e ?? 0 };
+}
+
+// ---------------------------------------------------------------------------
+// Layer 2 — memory store
+// ---------------------------------------------------------------------------
+
+// Write one distilled memory. Conservative dedup/supersede policy (docs/ROADMAP.md):
+//   - same project+type + SAME title (case/space-insensitive)  -> UPDATE in place
+//   - mem.supersedes = <id>                                    -> insert new, mark that id superseded
+//   - merely similar (cosine >= SIMILAR)                       -> insert new, RETURN the similar ids
+//     so the calling agent can decide to supersede explicitly — similarity alone never retires knowledge.
+// `embedding` is the vector for (title + content), computed by the caller (the server embeds).
+export function saveMemory(db, mem, embedding) {
+  if (!MEMORY_TYPES.includes(mem.type)) throw new Error(`unknown memory type "${mem.type}" (use one of: ${MEMORY_TYPES.join(', ')})`);
+  if (mem.status && !MEMORY_STATUSES.includes(mem.status)) throw new Error(`unknown status "${mem.status}"`);
+  const now = new Date().toISOString();
+  const project = canonicalProject(mem.project);
+  const norm = (s) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+  const blob = embedding ? vecToBlob(embedding) : null;
+  const jsonOrNull = (v) => (v == null ? null : JSON.stringify(v));
+
+  const siblings = db.prepare(
+    "SELECT id, title, embedding FROM memories WHERE project = ? AND type = ? AND status = 'active'"
+  ).all(project, mem.type);
+
+  // 1. exact-title refresh
+  const twin = siblings.find(s => norm(s.title) === norm(mem.title));
+  if (twin) {
+    db.prepare(`UPDATE memories SET content = ?, confidence = ?, entities = COALESCE(?, entities),
+      source_session = COALESCE(?, source_session), source_messages = COALESCE(?, source_messages),
+      embedding = COALESCE(?, embedding), updated_at = ? WHERE id = ?`)
+      .run(mem.content, mem.confidence ?? 0.8, jsonOrNull(mem.entities), mem.source_session ?? null,
+        jsonOrNull(mem.source_messages), blob, now, twin.id);
+    return { action: 'updated', id: twin.id };
+  }
+
+  // 2. insert (optionally retiring an explicit predecessor)
+  const info = db.prepare(`INSERT INTO memories
+    (type, project, title, content, confidence, status, valid_from, valid_until, supersedes,
+     source_session, source_messages, entities, embedding, created_at, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(mem.type, project, mem.title, mem.content, mem.confidence ?? 0.8, mem.status ?? 'active',
+      mem.valid_from ?? now, mem.valid_until ?? null, mem.supersedes ?? null,
+      mem.source_session ?? null, jsonOrNull(mem.source_messages), jsonOrNull(mem.entities), blob, now, now);
+  const id = Number(info.lastInsertRowid);
+  if (mem.supersedes) {
+    db.prepare("UPDATE memories SET status = 'superseded', valid_until = ?, updated_at = ? WHERE id = ? AND status = 'active'")
+      .run(now, now, mem.supersedes);
+    return { action: 'created', id, superseded: mem.supersedes };
+  }
+
+  // 3. similar-but-different: warn, never auto-retire
+  const SIMILAR = 0.90;
+  const similar = embedding
+    ? siblings.filter(s => s.embedding && dot(embedding, blobToVec(s.embedding)) >= SIMILAR)
+        .map(s => ({ id: s.id, title: s.title }))
+    : [];
+  return similar.length ? { action: 'created', id, similar } : { action: 'created', id };
+}
+
+// Hybrid search over memories — same vector+FTS5+RRF design as chunks, no cache needed
+// (the memory store stays small by design). status:'active' by default; 'any' includes retired.
+export function searchMemories(db, qvec, { project = null, k = 5, queryText = null, status = 'active', type = null } = {}) {
+  let sql = 'SELECT id, type, project, title, content, confidence, status, valid_until, supersedes, source_session, created_at, updated_at, embedding FROM memories WHERE 1=1';
+  const params = [];
+  if (project) { const m = aliasMembers(project); sql += ` AND project IN (${m.map(() => '?').join(',')})`; params.push(...m); }
+  if (status !== 'any') { sql += ' AND status = ?'; params.push(status); }
+  if (type) { sql += ' AND type = ?'; params.push(type); }
+  const rows = db.prepare(sql).all(...params);
+  if (!rows.length) return [];
+
+  const cand = rows.map(r => ({ r, sim: r.embedding ? dot(qvec, blobToVec(r.embedding)) : 0 }));
+  const terms = queryText ? tokenize(queryText) : [];
+  const RRF = 60, rrf = new Map();
+  const fuse = (ids, w = 1) => ids.forEach((id, idx) => rrf.set(id, (rrf.get(id) || 0) + w / (RRF + idx + 1)));
+  fuse([...cand].sort((a, b) => b.sim - a.sim).map(c => c.r.id));
+  if (terms.length) {
+    try {
+      const match = terms.map(t => `"${t}"`).join(' OR ');
+      fuse(db.prepare('SELECT rowid FROM memories_fts WHERE memories_fts MATCH ? ORDER BY bm25(memories_fts) LIMIT 50')
+        .all(match).map(r => r.rowid));
+    } catch { /* a bad MATCH never kills search */ }
+  }
+  const byId = new Map(cand.map(c => [c.r.id, c]));
+  return [...rrf.entries()]
+    .map(([id, score]) => ({ ...byId.get(id), score }))
+    .filter(s => s.r)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, k)
+    .map(s => ({ id: s.r.id, type: s.r.type, project: s.r.project, title: s.r.title, content: s.r.content,
+      confidence: s.r.confidence, status: s.r.status, supersedes: s.r.supersedes,
+      source_session: s.r.source_session, updated_at: s.r.updated_at, score: s.score }));
 }
 
 // Prompt-injection guard: what the server returns is EVIDENCE about the past, never
