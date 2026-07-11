@@ -49,7 +49,7 @@ const server = new McpServer(
       'save_state(content, project?) = write/refresh that curated note (overwrites; drop reverted decisions).',
       'save_memories(memories[]) = write distilled, self-contained knowledge (typed: decision/bug/solution/…) with provenance; same title refreshes, supersedes:<id> retires outdated knowledge.',
       'keep_session() = save THIS conversation to the brain (call proactively when it is worth remembering).',
-      'search_context(query, project?, since?, role?) = searches the WHOLE history (hybrid: semantic + exact-term). Put exact identifiers in the query verbatim — they match lexically. role:"summary" finds dense session recaps; role:"actions" finds what was done (commands/files).',
+      'search_context(query, project?, since?, role?, rerank?) = searches the WHOLE history (hybrid: semantic + exact-term). Put exact identifiers in the query verbatim — they match lexically. role:"summary" finds dense session recaps; role:"actions" finds what was done (commands/files). rerank:true = slower but sharper second pass — use for cross-language queries or as a retry when something SHOULD exist but does not surface.',
       'explore_entity(name) = one exact entity (service/table/ARN/repo/file/STATE_NAME): its projects, recency, co-occurring entities and newest mentions — for "what talks to X?" / "where is X used?".',
       '',
       'NAME GOTCHA: the cwd is "dashified" (new_test -> new-test). If get_state finds nothing,',
@@ -101,8 +101,9 @@ server.tool(
     since: z.string().optional().describe('minimum ISO date, e.g. 2026-06-01'),
     role: z.enum(['user', 'assistant', 'summary', 'actions']).optional().describe("filter by turn type: 'summary' = compaction recaps (dense session overviews), 'actions' = commands/files touched, 'user'/'assistant' = the conversation itself"),
     layer: z.enum(['both', 'raw', 'memories']).optional().describe("'both' (default) = distilled memories first, then raw history; 'memories' = only the distilled layer; 'raw' = only transcript chunks"),
+    rerank: z.boolean().optional().describe('slower but sharper: second-pass local cross-encoder reranking of the top candidates. Use for cross-language queries (e.g. an English query over Spanish notes) or as a retry when you KNOW something exists but the normal search cannot find it. Default off; first use loads a local model (one-time cost)'),
   },
-  async ({ query, project, k = 8, since, role, layer = 'both' }) => {
+  async ({ query, project, k = 8, since, role, layer = 'both', rerank = false }) => {
     const qvec = await embedOne(query);
     // Layer 2 first: distilled memories are curated knowledge — shown above raw hits.
     const mems = layer !== 'raw'
@@ -115,7 +116,8 @@ server.tool(
     if (layer === 'memories') {
       return { content: [{ type: 'text', text: mems.length ? wrapEvidence(memBlock, 'the distilled memory store') : 'No memories match.' }] };
     }
-    const hits = searchChunks(db, qvec, { project: project ?? null, k, since: since ?? null, queryText: query, role: role ?? null });
+    // await matters only when rerank:true (async cross-encoder tail); otherwise it's a no-op.
+    const hits = await searchChunks(db, qvec, { project: project ?? null, k, since: since ?? null, queryText: query, role: role ?? null, rerank });
     // Temporal-version signal: warn when a hit has a newer near-duplicate, or mark the latest of a set.
     const versionNote = (h) => h.outdatedBy
       ? ` · ⚠️ SUPERSEDED — newer related entry on ${h.outdatedBy}`
