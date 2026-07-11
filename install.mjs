@@ -119,6 +119,12 @@ console.log(`
   "SessionEnd":   [{ "matcher": "", "hooks": [{ "type": "command",
     "command": "nohup ${NPX} ingest >> \\"${BRAIN_DIR}/ingest.log\\" 2>&1 &", "timeout": 30 }] }]
 
+  OPTIONAL session-start context — injects your project's brain context at session start
+  (only for repos with brain data; prints nothing elsewhere, so unknown repos stay silent).
+  Model-free and instant. Append to the SessionStart hooks array above:
+
+    { "type": "command", "command": "${NPX} context --hook", "timeout": 10 }
+
   OPTIONAL auto-extraction — distill each opted-in session into durable memories (Layer 2)
   when it ends. It runs a headless 'claude -p' PER kept session, so it COSTS TOKENS; the
   in-session /distill command works without it. Append to the SessionEnd hooks array above:

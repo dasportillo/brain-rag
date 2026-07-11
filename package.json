@@ -21,6 +21,7 @@
     "transcripts.mjs",
     "search.mjs",
     "state.mjs",
+    "context.mjs",
     "distill.mjs",
     "distill-prompt.mjs",
     "always.mjs",
