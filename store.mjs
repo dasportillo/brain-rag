@@ -145,12 +145,13 @@ function candidateRows(db) {
 
 // Lexical leg: FTS5/BM25 top ids for the tokenized query (best first), same filters as the
 // vector leg. OR-semantics across tokens; bm25() ranks multi/rare-term matches higher.
-function lexicalTopIds(db, terms, members, since, limit) {
+function lexicalTopIds(db, terms, members, since, role, limit) {
   const match = terms.map(t => `"${t}"`).join(' OR ');
   let sql = 'SELECT c.id FROM chunks_fts f JOIN chunks c ON c.id = f.rowid WHERE chunks_fts MATCH ?';
   const params = [match];
   if (members) { sql += ` AND c.project IN (${[...members].map(() => '?').join(',')})`; params.push(...members); }
   if (since) { sql += ' AND c.ts >= ?'; params.push(since); }
+  if (role) { sql += ' AND c.role = ?'; params.push(role); }
   sql += ' ORDER BY bm25(chunks_fts) LIMIT ?';
   params.push(limit);
   try { return db.prepare(sql).all(...params).map(r => r.id); } catch { return []; } // a bad MATCH never kills search
@@ -163,11 +164,11 @@ const TEXT_POOL = 60; // fused ids whose text is fetched (dedup happens inside t
 // without it (or mode:'semantic'), pure vector + recency. project optional (alias-aware exact
 // filter), since optional (min ISO date). recencyBoost mixes recency in so recent items weigh
 // a bit more.
-export function searchChunks(db, qvec, { project = null, k = 8, since = null, recencyBoost = 0.05, queryText = null, mode = 'hybrid' } = {}) {
+export function searchChunks(db, qvec, { project = null, k = 8, since = null, recencyBoost = 0.05, queryText = null, mode = 'hybrid', role = null } = {}) {
   const members = project ? aliasMembers(project) : null;
   const memberSet = members ? new Set(members) : null;
   const rows = candidateRows(db).filter(r =>
-    (!memberSet || memberSet.has(r.project)) && (!since || (r.ts && r.ts >= since)));
+    (!memberSet || memberSet.has(r.project)) && (!since || (r.ts && r.ts >= since)) && (!role || r.role === role));
 
   const now = Date.now();
   const recency = (ts) => (recencyBoost && ts) ? recencyBoost * Math.exp(-((now - Date.parse(ts)) / 86400000) / 45) : 0;
@@ -180,7 +181,7 @@ export function searchChunks(db, qvec, { project = null, k = 8, since = null, re
     const RRF = 60, REC_W = 0.5, rrf = new Map();
     const fuse = (ids, w = 1) => ids.forEach((id, idx) => rrf.set(id, (rrf.get(id) || 0) + w / (RRF + idx + 1)));
     fuse([...cand].sort((a, b) => b.sim - a.sim).slice(0, FUSE_POOL).map(c => c.r.id));
-    fuse(lexicalTopIds(db, terms, members, since, FUSE_POOL));
+    fuse(lexicalTopIds(db, terms, members, since, role, FUSE_POOL));
     // recency as a third signal (half weight ⇒ worth at most ~half a vector rank; never dominates)
     if (recencyBoost) fuse(cand.filter(c => c.r.ts).sort((a, b) => Date.parse(b.r.ts) - Date.parse(a.r.ts)).slice(0, FUSE_POOL).map(c => c.r.id), REC_W);
     const byId = new Map(cand.map(c => [c.r.id, c]));
