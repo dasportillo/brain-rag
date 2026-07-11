@@ -94,12 +94,12 @@ cites its source lines; memory-targeted eval cases beat raw-chunk retrieval.
 > Never return isolated chunks; never make the user ask. With Layer 2 populated this is assembly,
 > not research.
 
-- [ ] MCP tool `get_context(project)`: ordered, size-budgeted (~2–4k tokens) package — project
+- [x] MCP tool `get_context(project)`: ordered, size-budgeted (~2–4k tokens) package — project
       summary (state note) → active decisions → relevant memories → open TODOs → potential
       conflicts (contradictory active memories) → sources. Cited, clipped, wrapped as evidence.
-- [ ] Conflict detection: pairs of `active` memories, same project+type, high similarity, opposing
+- [x] Conflict detection: pairs of `active` memories, same project+type, high similarity, opposing
       content → surfaced in `get_context`, resolvable via supersede.
-- [ ] **SessionStart injection**: `brain-rag context --hook` prints the compact context for the
+- [x] **SessionStart injection**: `brain-rag context --hook` prints the compact context for the
       detected repo (hooks inject stdout); cached/materialized at ingest so cold start is <1 s.
       Gated by the same opt-in.
 - [x] TODO lifecycle: extraction marks earlier `todo` memories done/obsolete when a later session
@@ -116,20 +116,20 @@ faithfulness ≥ agreed threshold; conflicts are surfaced, not silently blended.
 
 > The last mile, shipped only where the (now large) eval proves value.
 
-- [ ] Local cross-encoder reranker (transformers.js, e.g. a small bge-reranker): retrieve ~30
+- [x] Local cross-encoder reranker (transformers.js, e.g. a small bge-reranker): retrieve ~30
       candidates → rerank → top 8, blended with priors (recency, confidence, status, explicit
       decisions). **A/B against v0.9; ship only on improvement** — the chunk-size lesson
       (80%→70% regression, reverted) applies doubly here.
-- [ ] Entity extraction, heuristic first: repos, file paths, AWS ARNs, DB/table names, service
+- [x] Entity extraction, heuristic first: repos, file paths, AWS ARNs, DB/table names, service
       names — regex/parser at ingest, no LLM. `entities` + `edges` tables
       (`EFY3 —uses→ Aurora PostgreSQL`, `watermarks —moved_to→ DynamoDB`).
-- [ ] Entity-aware retrieval: `search_context(entity: …)` filter + entity expansion in the fused
+- [x] Entity-aware retrieval: `search_context(entity: …)` filter + entity expansion in the fused
       ranking; entity-hop eval cases ("what talks to Aurora?").
-- [ ] Extraction parity for Codex sessions (ride the shared ingest; Codex `notify` hook only if
+- [x] Extraction parity for Codex sessions (ride the shared ingest; Codex `notify` hook only if
       measurement shows staleness hurts).
-- [ ] Any-MCP-client docs: config snippets for Cursor / Windsurf / VS Code agent mode — the server
+- [x] Any-MCP-client docs: config snippets for Cursor / Windsurf / VS Code agent mode — the server
       already speaks to any of them; memory belongs to the developer, not the model.
-- [ ] README benchmark table showing the metric progression v0.5 → v1.0.
+- [x] README benchmark table showing the metric progression v0.5 → v1.0.
 
 **Done when:** reranker earns its latency on the eval; entity questions answerable; a third,
 non-Anthropic, non-OpenAI MCP client is documented working against the same brain.
