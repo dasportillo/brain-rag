@@ -58,6 +58,32 @@ test('session title is attached to hits (and only where present)', () => {
   assert.equal(results.find(r => r.session === 's2').title, undefined);
 });
 
+// --- v0.7: FTS5 lexical leg + migrations ------------------------------------
+
+test('FTS5 leg rescues an exact term the vector misses, accent- and underscore-insensitive', () => {
+  // s4 is vectorially ORTHOGONAL to the query but holds the exact rare terms (with accent +
+  // underscore); s5 is cosine-aligned but lexically unrelated. Hybrid must rank s4 first.
+  insC.run('/p/s4.jsonl', 'lexproj', 's4', '2026-02-01', 'assistant', 'la auditoría VCO se dispara por MONTOS_FIJOS', vecToBlob(vec(0, 1)));
+  insC.run('/p/s5.jsonl', 'lexproj', 's5', '2026-02-02', 'assistant', 'coffee brewing temperature notes again', vecToBlob(vec(0.9, 0.436)));
+  const res = searchChunks(db, vec(1, 0), { k: 2, project: 'lexproj', queryText: 'auditoria montos_fijos', recencyBoost: 0 });
+  assert.equal(res[0].session, 's4', 'lexical exact-term match outranks the higher-cosine chunk');
+});
+
+test("mode: 'semantic' ignores the lexical leg (pure cosine order)", () => {
+  const res = searchChunks(db, vec(1, 0), { k: 2, project: 'lexproj', queryText: 'auditoria montos_fijos', mode: 'semantic', recencyBoost: 0 });
+  assert.equal(res[0].session, 's5');
+});
+
+test('migration v1 is idempotent and triggers keep FTS in sync (insert + delete)', () => {
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 1);
+  const again = openDb(); // same file, second connection: migrate() must be a no-op
+  assert.equal(again.prepare('PRAGMA user_version').get().user_version, 1);
+  const count = () => db.prepare(`SELECT count(*) n FROM chunks_fts WHERE chunks_fts MATCH '"auditoria"'`).get().n;
+  assert.equal(count(), 1, 'insert trigger indexed the accented text, diacritics-normalized');
+  db.exec("DELETE FROM chunks WHERE project = 'lexproj'"); // also cleans up for the facet tests below
+  assert.equal(count(), 0, 'delete trigger removed it from the FTS index');
+});
+
 test('project filter restricts the candidate set', () => {
   const none = searchChunks(db, vec(1, 0), { k: 5, project: 'nope', queryText: 'oauth-idp' });
   assert.equal(none.length, 0);

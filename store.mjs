@@ -66,8 +66,41 @@ export function openDb() {
     CREATE INDEX IF NOT EXISTS idx_chunks_project ON chunks(project);
   `);
   // migration: per-session title (Claude Code's ai-title). Ignore if the column already exists.
+  // (Predates the user_version scheme below; kept as-is for DBs from any prior version.)
   try { db.exec('ALTER TABLE sessions ADD COLUMN title TEXT'); } catch { /* already present */ }
+  migrate(db);
   return db;
+}
+
+// Versioned migrations (PRAGMA user_version). Each step runs once per DB, in order.
+function migrate(db) {
+  const version = () => db.prepare('PRAGMA user_version').get().user_version;
+  if (version() < 1) {
+    // v1: FTS5 index over chunks for the lexical leg of hybrid search. External-content
+    // (no text duplication); triggers keep it in sync with every ingest/forget from any
+    // entry point; one-shot 'rebuild' backfills existing rows. unicode61 with
+    // remove_diacritics matches the bilingual corpus (auditoría == auditoria).
+    db.exec(`
+      BEGIN;
+      CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+        text, content='chunks', content_rowid='id',
+        tokenize="unicode61 remove_diacritics 2"
+      );
+      CREATE TRIGGER IF NOT EXISTS chunks_fts_ai AFTER INSERT ON chunks BEGIN
+        INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
+      END;
+      CREATE TRIGGER IF NOT EXISTS chunks_fts_ad AFTER DELETE ON chunks BEGIN
+        INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', old.id, old.text);
+      END;
+      CREATE TRIGGER IF NOT EXISTS chunks_fts_au AFTER UPDATE OF text ON chunks BEGIN
+        INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES('delete', old.id, old.text);
+        INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
+      END;
+      INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild');
+      COMMIT;
+      PRAGMA user_version = 1;
+    `);
+  }
 }
 
 // Float32Array -> BLOB and back
@@ -85,61 +118,94 @@ function dot(a, b) {
   return s;
 }
 
-// Top-k search. project optional (exact filter), since optional (min ISO date).
-// recencyBoost: mixes similarity with recency so recent items weigh a bit more.
-// Common English stopwords; tokenizes keeping ':' and '_' (groups-claim, snake_case).
-const STOP = new Set('the and for are with that this its you our from into not but has have was were will can'.split(/\s+/));
+// Common English + Spanish stopwords; tokenizes unicode letters (auditoría, señal) keeping
+// ':' and '_' (ssm:GetParameter, snake_case). Quoted per-token in FTS MATCH, multi-part tokens
+// become phrase queries, so "ssm:getparameter" still matches exactly.
+const STOP = new Set(('the and for are with that this its you our from into not but has have was were will can ' +
+  'que para por con los las una del este esta esto como mas más pero sus sin sobre entre cuando donde cual').split(/\s+/));
 function tokenize(q) {
-  return [...new Set((q.toLowerCase().match(/[a-z0-9_:]{3,}/g) || []).filter(t => !STOP.has(t)))];
+  return [...new Set((q.toLowerCase().match(/[\p{L}\p{N}_:]{3,}/gu) || []).filter(t => !STOP.has(t)))];
 }
 
-// Top-k search. With `queryText` it goes HYBRID (vector + lexical fused via RRF); without it, pure vector.
-export function searchChunks(db, qvec, { project = null, k = 8, since = null, recencyBoost = 0.05, queryText = null } = {}) {
-  let sql = 'SELECT project, session, ts, role, text, embedding FROM chunks WHERE embedding IS NOT NULL';
-  const params = [];
-  if (project) {
-    // expand the filter to every raw project name sharing this project's canonical (alias-aware)
-    const members = aliasMembers(project);
-    sql += ` AND project IN (${members.map(() => '?').join(',')})`;
-    params.push(...members);
-  }
-  if (since)   { sql += ' AND ts >= ?';     params.push(since); }
-  const rows = db.prepare(sql).all(...params);
+// In-memory candidate cache for the vector leg: (id, project, session, ts, role, vec) for every
+// embedded chunk — NO text (texts are fetched only for the final pool). Invalidated when another
+// connection commits (data_version) or this one inserts/deletes (count + max id). ~50 MB at 30k
+// chunks — fine for a long-lived personal server; one-shot CLIs just pay one full read as before.
+let _cand = null;
+function candidateRows(db) {
+  const g = db.prepare(`SELECT (SELECT data_version FROM pragma_data_version()) dv,
+    COUNT(*) n, COALESCE(MAX(id),0) m FROM chunks WHERE embedding IS NOT NULL`).get();
+  const guard = `${g.dv}:${g.n}:${g.m}`;
+  if (_cand?.guard === guard) return _cand.rows;
+  const rows = db.prepare('SELECT id, project, session, ts, role, embedding FROM chunks WHERE embedding IS NOT NULL').all()
+    .map(r => ({ id: r.id, project: r.project, session: r.session, ts: r.ts, role: r.role, vec: blobToVec(r.embedding) }));
+  _cand = { guard, rows };
+  return rows;
+}
+
+// Lexical leg: FTS5/BM25 top ids for the tokenized query (best first), same filters as the
+// vector leg. OR-semantics across tokens; bm25() ranks multi/rare-term matches higher.
+function lexicalTopIds(db, terms, members, since, limit) {
+  const match = terms.map(t => `"${t}"`).join(' OR ');
+  let sql = 'SELECT c.id FROM chunks_fts f JOIN chunks c ON c.id = f.rowid WHERE chunks_fts MATCH ?';
+  const params = [match];
+  if (members) { sql += ` AND c.project IN (${[...members].map(() => '?').join(',')})`; params.push(...members); }
+  if (since) { sql += ' AND c.ts >= ?'; params.push(since); }
+  sql += ' ORDER BY bm25(chunks_fts) LIMIT ?';
+  params.push(limit);
+  try { return db.prepare(sql).all(...params).map(r => r.id); } catch { return []; } // a bad MATCH never kills search
+}
+
+const FUSE_POOL = 60; // per-leg candidates entering the RRF fusion
+const TEXT_POOL = 60; // fused ids whose text is fetched (dedup happens inside this pool)
+
+// Top-k search. With `queryText` it goes HYBRID (vector + FTS5/BM25 lexical fused via RRF);
+// without it (or mode:'semantic'), pure vector + recency. project optional (alias-aware exact
+// filter), since optional (min ISO date). recencyBoost mixes recency in so recent items weigh
+// a bit more.
+export function searchChunks(db, qvec, { project = null, k = 8, since = null, recencyBoost = 0.05, queryText = null, mode = 'hybrid' } = {}) {
+  const members = project ? aliasMembers(project) : null;
+  const memberSet = members ? new Set(members) : null;
+  const rows = candidateRows(db).filter(r =>
+    (!memberSet || memberSet.has(r.project)) && (!since || (r.ts && r.ts >= since)));
 
   const now = Date.now();
   const recency = (ts) => (recencyBoost && ts) ? recencyBoost * Math.exp(-((now - Date.parse(ts)) / 86400000) / 45) : 0;
-  const cand = rows.map((r, i) => { const vec = blobToVec(r.embedding); return { i, r, vec, sim: dot(qvec, vec), lc: r.text.toLowerCase() }; });
+  const cand = rows.map(r => ({ r, sim: dot(qvec, r.vec) }));
 
-  const terms = queryText ? tokenize(queryText) : [];
-  let scored;
+  const terms = (mode === 'hybrid' && queryText) ? tokenize(queryText) : [];
+  let scored; // [{ r, sim, score }] best-first
   if (terms.length) {
-    // lexical: term overlap weighted by rarity (idf over the candidate set)
-    const N = cand.length, idf = {};
-    for (const t of terms) {
-      let df = 0; for (const c of cand) if (c.lc.includes(t)) df++;
-      idf[t] = Math.log(1 + N / (df + 1));
-    }
-    for (const c of cand) c.lex = terms.reduce((s, t) => s + (c.lc.includes(t) ? idf[t] : 0), 0);
     // RRF: fuses vector + lexical (+ a gentle recency signal), robust with no scale normalization.
     const RRF = 60, REC_W = 0.5, rrf = new Map();
-    const fuse = (list, w = 1) => list.forEach((c, idx) => rrf.set(c.i, (rrf.get(c.i) || 0) + w / (RRF + idx + 1)));
-    fuse([...cand].sort((a, b) => b.sim - a.sim));                      // vector ranking
-    fuse(cand.filter(c => c.lex > 0).sort((a, b) => b.lex - a.lex));    // lexical ranking
+    const fuse = (ids, w = 1) => ids.forEach((id, idx) => rrf.set(id, (rrf.get(id) || 0) + w / (RRF + idx + 1)));
+    fuse([...cand].sort((a, b) => b.sim - a.sim).slice(0, FUSE_POOL).map(c => c.r.id));
+    fuse(lexicalTopIds(db, terms, members, since, FUSE_POOL));
     // recency as a third signal (half weight ⇒ worth at most ~half a vector rank; never dominates)
-    if (recencyBoost) fuse(cand.filter(c => c.r.ts).sort((a, b) => Date.parse(b.r.ts) - Date.parse(a.r.ts)), REC_W);
-    scored = cand.map(c => ({ project: c.r.project, session: c.r.session, ts: c.r.ts, role: c.r.role, text: c.r.text, score: rrf.get(c.i) || 0, sim: c.sim, _vec: c.vec }));
+    if (recencyBoost) fuse(cand.filter(c => c.r.ts).sort((a, b) => Date.parse(b.r.ts) - Date.parse(a.r.ts)).slice(0, FUSE_POOL).map(c => c.r.id), REC_W);
+    const byId = new Map(cand.map(c => [c.r.id, c]));
+    scored = [...rrf.entries()]
+      .map(([id, score]) => ({ ...byId.get(id), score }))
+      .filter(s => s.r) // an FTS hit outside the candidate set (no embedding) can't be scored
+      .sort((a, b) => b.score - a.score);
   } else {
-    scored = cand.map(c => ({ project: c.r.project, session: c.r.session, ts: c.r.ts, role: c.r.role, text: c.r.text, score: c.sim + recency(c.r.ts), sim: c.sim, _vec: c.vec }));
+    scored = cand.map(c => ({ ...c, score: c.sim + recency(c.r.ts) })).sort((a, b) => b.score - a.score);
   }
 
-  scored.sort((a, b) => b.score - a.score);
-  // dedup: the same text appears under several paths/projects and wastes top-k slots.
+  // fetch text ONLY for the fusion pool (the full scan never loads text — that's the perf win),
+  // then dedup: the same text appears under several paths/projects and wastes top-k slots.
+  const pool = scored.slice(0, TEXT_POOL);
+  const textById = new Map(pool.length
+    ? db.prepare(`SELECT id, text FROM chunks WHERE id IN (${pool.map(() => '?').join(',')})`).all(...pool.map(s => s.r.id)).map(r => [r.id, r.text])
+    : []);
   const seen = new Set(), out = [];
-  for (const s of scored) {
-    const key = s.text.replace(/\s+/g, ' ').trim().slice(0, 300);
+  for (const s of pool) {
+    const text = textById.get(s.r.id);
+    if (text == null) continue;
+    const key = text.replace(/\s+/g, ' ').trim().slice(0, 300);
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(s);
+    out.push({ project: s.r.project, session: s.r.session, ts: s.r.ts, role: s.r.role, text, score: s.score, sim: s.sim, _vec: s.r.vec });
     if (out.length >= k) break;
   }
   // TEMPORAL VERSION SIGNAL: within the returned set, flag results that are near-duplicate in TOPIC

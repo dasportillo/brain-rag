@@ -45,17 +45,17 @@ Each version ships only if the eval says it should — which is why the eval com
 > FTS5 with bm25() is verified available in `node:sqlite` — zero new dependencies. This attacks the
 > measured miss class (exact-term dilution) head-on.
 
-- [ ] **Schema migrations**: introduce `PRAGMA user_version` + a tiny migration runner in
+- [x] **Schema migrations**: introduce `PRAGMA user_version` + a tiny migration runner in
       `store.mjs` (today the schema is only `CREATE TABLE IF NOT EXISTS`; v0.7+ changes existing
       DBs).
-- [ ] FTS5 external-content table over `chunks` (no text duplication), populated at ingest;
+- [x] FTS5 external-content table over `chunks` (no text duplication), populated at ingest;
       one-shot backfill migration for existing `brain.db`.
-- [ ] Lexical search path in `store.mjs` (`bm25()` ranking, same project/since/role filters).
-- [ ] **Reciprocal Rank Fusion** of semantic + lexical result lists (k≈60), filters applied to both
+- [x] Lexical search path in `store.mjs` (`bm25()` ranking, same project/since/role filters).
+- [x] **Reciprocal Rank Fusion** of semantic + lexical result lists (k≈60), filters applied to both
       legs; temporal-version signal and cross-project facet preserved on the fused list.
 - [ ] Richer metadata filters on `search_context` (role, title, session) + updated server
       instructions teaching the caller when to quote exact terms.
-- [ ] A/B on the v0.6 eval: hybrid vs semantic-only, sliced by case kind.
+- [x] A/B on the v0.6 eval: hybrid vs semantic-only, sliced by case kind.
 
 **Done when:** hybrid ≥ semantic-only on every metric slice (exact-term Recall@8 up materially),
 search p95 stays under ~300 ms on the current corpus.

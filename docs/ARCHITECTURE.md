@@ -8,8 +8,8 @@ the deep dive behind the overview in the [README](../README.md).
 `brain-rag` is a five-stage pipeline plus a retrieval surface:
 
 ```
-ingest:  discover → opt-in filter → parse → redact → chunk → embed → store
-serve:   query → embed → cosine top-k → return
+ingest:  discover → opt-in filter → parse → redact → chunk → embed → store (+ FTS index via triggers)
+serve:   query → embed → [vector scan ∥ FTS5/BM25] → RRF fuse (+recency) → top-k → return
 ```
 
 Nothing leaves the machine. Embeddings are computed locally, the store is a local SQLite file, and

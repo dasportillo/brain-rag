@@ -51,7 +51,7 @@ turns those hundreds of sessions into one recallable memory.
 |---|---|
 | **Local embeddings** (`Xenova/multilingual-e5-small`, 384-dim) — not a cloud API | Transcripts contain secrets (JWTs, AWS keys, DB passwords). Local = private, free, offline. Multilingual because the corpus mixes languages (see Evaluation). |
 | **`node:sqlite`** (Node's built-in SQLite) | Zero native compilation. Ships with Node 22.5+. |
-| **Brute-force cosine in JS** — no `pgvector`, no vector DB | At this scale (tens of thousands of chunks) it's sub-100 ms. No server, no Docker to keep running. |
+| **Hybrid retrieval**: brute-force cosine in JS + **FTS5/BM25**, fused with RRF — no `pgvector`, no vector DB | Vector alone misses exact terms; lexical alone misses paraphrase. Fused: R@8 0.97 at p50 ~90 ms over 30k chunks (see `docs/EVAL-BASELINE.md`). No server, no Docker to keep running. |
 | **Embedded store, always-on** | A personal brain must answer from any project at any time, even if no daemon is up. |
 | **Redaction at ingest** | JWTs / `AKIA…` / private keys / tokens are scrubbed before anything is stored. |
 
