@@ -6,6 +6,9 @@ import { execSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+// The extraction prompt lives in distill-prompt.mjs (single source of truth — the /distill slash
+// command, the Codex custom prompt and the headless batch extractor must never drift apart).
+import { DISTILL_PROMPT } from './distill-prompt.mjs';
 
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
 const NAME = pkg.name;                 // e.g. brain-rag
@@ -16,16 +19,6 @@ const CODEX_HOME = join(homedir(), '.codex');
 
 console.log(`▸ ${NAME} install (npx-native)\n  data dir: ${BRAIN_DIR}`);
 mkdirSync(BRAIN_DIR, { recursive: true });
-
-// Shared by the Claude Code slash command and the Codex custom prompt: in-session memory
-// extraction — the AGENT distills, the server just stores (see docs/ROADMAP.md, v0.8).
-const DISTILL_PROMPT = `Distill THIS conversation into durable memories and save them to the second brain.
-
-1. Review the conversation for knowledge worth keeping beyond this chat: decisions (with their WHY), bug root causes, solutions, architecture facts, preferences, workflows, lessons learned, open TODOs.
-2. For each one, build a SELF-CONTAINED memory (readable without the conversation): a short stable title, the fact + why + minimal context, the right type, entities it touches, and 1-2 short verbatim quotes from the conversation as source_messages.
-3. Call the \`save_memories\` tool from the \`brain\` MCP server with ALL of them in one batch (3-8 memories is typical; skip trivia and dead ends). If the response warns an existing memory is now outdated, save again with supersedes:<id>.
-4. Report one line per saved memory.
-`;
 
 // 1. Register the MCP server globally (idempotent).
 try {
@@ -126,10 +119,18 @@ console.log(`
   "SessionEnd":   [{ "matcher": "", "hooks": [{ "type": "command",
     "command": "nohup ${NPX} ingest >> \\"${BRAIN_DIR}/ingest.log\\" 2>&1 &", "timeout": 30 }] }]
 
+  OPTIONAL auto-extraction — distill each opted-in session into durable memories (Layer 2)
+  when it ends. It runs a headless 'claude -p' PER kept session, so it COSTS TOKENS; the
+  in-session /distill command works without it. Append to the SessionEnd hooks array above:
+
+    { "type": "command",
+      "command": "nohup ${NPX} distill --hook >> \\"${BRAIN_DIR}/distill.log\\" 2>&1 &", "timeout": 30 }
+
   Optional shell wrapper — start an opted-in session with 'claude --brain':
     claude() { local b=0 a=(); for x in "$@"; do [ "$x" = --brain ] && b=1 || a+=("$x"); done;
       if (( b )); then BRAIN=1 command claude "\${a[@]}"; else command claude "\${a[@]}"; fi; }
 
+  Standing opt-in: '${NPX} always add' inside a repo keeps EVERY session started there (no BRAIN=1).
   Mid-session: /brain opts the current conversation in · /state writes the current-state note.
 
   Tip: for zero npx overhead on every hook, 'npm i -g ${NAME}' and replace '${NPX}' with 'brain-rag'.

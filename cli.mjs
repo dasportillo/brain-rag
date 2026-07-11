@@ -15,6 +15,9 @@ switch (cmd) {
   case 'state':        await import('./state.mjs'); break;              // dump a project's recent activity
   case 'mark-keep':    await import('./mark-keep.mjs'); break;          // SessionStart opt-in hook
   case 'mark-current': await import('./mark-current-keep.mjs'); break;  // /brain backend
+  // distill/always export main() instead of running on import — tests import their pure helpers.
+  case 'distill':      await (await import('./distill.mjs')).main(); break; // batch memory extraction (headless claude -p)
+  case 'always':       await (await import('./always.mjs')).main(); break;  // standing per-repo opt-in (always.list)
   case 'install':      await import('./install.mjs'); break;            // wire into Claude Code + Codex
   case 'uninstall':    await import('./uninstall.mjs'); break;          // unregister + remove commands
   default:
@@ -32,7 +35,10 @@ Usage: brain-rag <command>
   stats           Print index status
   search "query"  Search the brain from the CLI
   state [project] Dump a project's recent activity (raw material for /state)
-  mark-keep       SessionStart hook: opt a BRAIN=1 session in
+  distill         Extract durable memories from indexed sessions via headless claude — costs tokens
+                  [--project X] [--session <transcript>] [--limit N] [--dry] [--hook]
+  always          Standing opt-in: always keep sessions of a repo — add [path] | remove [path] | list
+  mark-keep       SessionStart hook: opt a BRAIN=1 (or always-listed) session in
   mark-current    Opt the CURRENT session in (the /brain command backend)
 `);
     if (cmd && !['help', '--help', '-h'].includes(cmd)) process.exit(1);
