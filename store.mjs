@@ -153,16 +153,17 @@ export const MEMORY_TYPES = ['decision', 'fact', 'architecture', 'bug', 'solutio
   'meeting', 'preference', 'workflow', 'code_pattern', 'aws_resource', 'database', 'deployment', 'incident', 'learning'];
 export const MEMORY_STATUSES = ['active', 'superseded', 'deprecated', 'experimental', 'obsolete'];
 
-// Float32Array -> BLOB and back
+// Float32Array -> BLOB and back. Both exported: context.mjs reuses them to compare stored
+// memory embeddings (conflict detection) without duplicating the encoding.
 export function vecToBlob(vec) {
   return Buffer.from(new Float32Array(vec).buffer);
 }
-function blobToVec(u8) {
+export function blobToVec(u8) {
   return new Float32Array(u8.buffer, u8.byteOffset, Math.floor(u8.byteLength / 4));
 }
 
 // Cosine = dot product (vectors come normalized from the embedder).
-function dot(a, b) {
+export function dot(a, b) {
   let s = 0;
   for (let i = 0; i < a.length; i++) s += a[i] * b[i];
   return s;

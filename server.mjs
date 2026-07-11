@@ -9,6 +9,7 @@ import { join, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { openDb, searchChunks, listProjects, canonicalProject, recentActivity, wrapEvidence, BRAIN_DIR,
   saveMemory, searchMemories, MEMORY_TYPES, MEMORY_STATUSES } from './store.mjs';
+import { buildContext } from './context.mjs';
 import { gitRootName, findCurrentTranscript } from './transcripts.mjs';
 import { embedOne, embed } from './embed.mjs';
 
@@ -26,6 +27,9 @@ const server = new McpServer(
       '(indexed history of Claude Code & Codex conversations + curated per-project state).',
       '',
       'WHEN TO USE IT (proactively, even if not asked with these exact words):',
+      '- FIRST thing to call when starting work in a known repo: get_context(project) — the assembled',
+      '  briefing (state + active decisions + recent knowledge + open TODOs + potential conflicts).',
+      '  One call replaces get_state + several searches for session start / "where did I leave off" / ramp-up.',
       '- When the user asks about the STATE of something: "where did I leave off?", "give me the state of X",',
       '  "what do you know about this project?", "what state is X in?".',
       '  -> get_state(project) for the curated state.',
@@ -40,7 +44,8 @@ const server = new McpServer(
       '  pieces into save_memories (a decision with its why, a bug root cause, a solution). The brain',
       '  is OPT-IN, so an un-kept chat is lost. Do NOT keep trivial / throwaway / exploratory chats.',
       '',
-      'TOOLS: get_state(project?) = curated "where I am today"; if no note exists it returns recent activity (NOT curated) — synthesize + save_state to persist.',
+      'TOOLS: get_context(project?) = the assembled session-start context (state note + active decisions + recent knowledge + open TODOs + conflicts, budgeted and cited) — call it FIRST in a known repo.',
+      'get_state(project?) = curated "where I am today"; if no note exists it returns recent activity (NOT curated) — synthesize + save_state to persist.',
       'save_state(content, project?) = write/refresh that curated note (overwrites; drop reverted decisions).',
       'save_memories(memories[]) = write distilled, self-contained knowledge (typed: decision/bug/solution/…) with provenance; same title refreshes, supersedes:<id> retires outdated knowledge.',
       'keep_session() = save THIS conversation to the brain (call proactively when it is worth remembering).',
@@ -63,6 +68,27 @@ function currentSessionRef() {
   const t = findCurrentTranscript(process.cwd());
   return t ? basename(t, '.jsonl') : null;
 }
+
+server.tool(
+  'get_context',
+  'Assembles the FULL working context for a project in ONE call: curated state note + active decisions + recent knowledge + open TODOs + potential conflicts, size-budgeted with a sources footer. USE IT FIRST at session start, when the user asks "where did I leave off?", or to ramp up on a known repo — one call replaces get_state + several search_context calls. Model-free and instant. Falls back to recent activity when the project has no curated data yet.',
+  { project: z.string().optional().describe('project; defaults to the current cwd') },
+  async ({ project }) => {
+    const p = canonicalProject(project || currentProject());
+    const { text } = buildContext(db, p);
+    if (text) {
+      return { content: [{ type: 'text', text: wrapEvidence(text, 'the assembled project context') }] };
+    }
+    // No state note and no memories: same graceful fallback as get_state (recent raw activity,
+    // clearly marked NOT curated) — a known-but-uncurated repo is an invitation, not an error.
+    const recent = recentActivity(db, p, { days: 30, limit: 30 });
+    const fallback = recent.length
+      ? wrapEvidence(`No curated state or memories for "${p}" — showing recent activity instead (NOT curated; synthesize + save_state / save_memories to build the real context):\n\n` +
+        recent.map(r => `[${r.ts?.slice(0, 10) ?? '?'} ${r.role}] ${clip(r.text.replace(/\s+/g, ' ').trim(), 400)}`).join('\n'))
+      : `No brain data for "${p}" (no state note, no memories, no recent indexed activity). If the name is off, run list_projects for the exact one; use save_state / save_memories to start the context.`;
+    return { content: [{ type: 'text', text: fallback }] };
+  }
+);
 
 server.tool(
   'search_context',

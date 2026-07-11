@@ -13,6 +13,8 @@ switch (cmd) {
   case 'stats':        process.argv.push('--stats'); await import('./ingest.mjs'); break;
   case 'search':       await import('./search.mjs'); break;             // CLI search
   case 'state':        await import('./state.mjs'); break;              // dump a project's recent activity
+  // context exports main() instead of running on import — tests import its pure helpers.
+  case 'context':      await (await import('./context.mjs')).main(); break; // assembled project context (also the SessionStart hook)
   case 'mark-keep':    await import('./mark-keep.mjs'); break;          // SessionStart opt-in hook
   case 'mark-current': await import('./mark-current-keep.mjs'); break;  // /brain backend
   // distill/always export main() instead of running on import — tests import their pure helpers.
@@ -35,6 +37,9 @@ Usage: brain-rag <command>
   stats           Print index status
   search "query"  Search the brain from the CLI
   state [project] Dump a project's recent activity (raw material for /state)
+  context [project] Print the assembled brain context for a project (state + decisions +
+                  knowledge + TODOs + conflicts); --hook = SessionStart injection (silent
+                  on repos with no brain data)
   distill         Extract durable memories from indexed sessions via headless claude — costs tokens
                   [--project X] [--session <transcript>] [--limit N] [--dry] [--hook]
   always          Standing opt-in: always keep sessions of a repo — add [path] | remove [path] | list
