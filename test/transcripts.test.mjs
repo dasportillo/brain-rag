@@ -2,11 +2,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, rmSync, mkdtempSync, mkdirSync, utimesSync } from 'node:fs';
-import { join, basename } from 'node:path';
+import { join, basename, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   redact, chunkText, projectFromPath, parseTranscript, gitRootName,
   parseCodexRollout, parseSession, isCodexRollout, codexHeadCwd, findCurrentTranscript,
+  ADAPTERS, registerAdapter, CLAUDE_PROJECTS, CODEX_SESSIONS,
 } from '../transcripts.mjs';
 
 test('redact scrubs known secret shapes', () => {
@@ -113,6 +114,104 @@ test('parseCodexRollout: cwd, roles, noise drop, no event_msg duplication, actio
 
   assert.match(turns.find(t => t.role === 'summary').text, /Recap: we traced/);
   rmSync(dir, { recursive: true, force: true });
+});
+
+// --- Adapter registry -------------------------------------------------------
+
+test('adapter registry: ships the two real adapters with the documented shape', () => {
+  const byName = Object.fromEntries(ADAPTERS.map(a => [a.name, a]));
+  assert.equal(byName['claude-code'].root, CLAUDE_PROJECTS);
+  assert.equal(byName['codex'].root, CODEX_SESSIONS);
+  for (const a of ADAPTERS) {
+    assert.equal(typeof a.detect, 'function', `${a.name}.detect`);
+    assert.equal(typeof a.parse, 'function', `${a.name}.parse`);
+    assert.equal(typeof a.currentSessionCwdMatch, 'function', `${a.name}.currentSessionCwdMatch`);
+  }
+});
+
+test('adapter registry: a registered adapter is dispatched by parseSession and findCurrentTranscript', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'brain-registry-'));
+  const fakeRoot = join(dir, 'fake-agent-sessions');
+  mkdirSync(fakeRoot, { recursive: true });
+  const fakeFile = join(fakeRoot, 'chat-1.jsonl');
+  // no sessionId/parentUuid and no session_meta → neither real adapter claims it
+  writeFileSync(fakeFile, JSON.stringify({ format: 'fake-agent', dir: '/Users/me/work/foo', text: 'hi' }));
+
+  const fake = registerAdapter({
+    name: 'fake-agent',
+    root: fakeRoot,
+    detect: (f) => f.endsWith('.jsonl') && f.startsWith(fakeRoot),
+    parse: () => ({ turns: [{ role: 'user', text: 'from the fake adapter', ts: null, session: 'f-1' }], title: 'fake title', cwd: '/Users/me/work/foo' }),
+    currentSessionCwdMatch: (f, cwd) => cwd === '/Users/me/work/foo',
+  });
+  try {
+    // parseSession dispatches through the registry, not a hardcoded if/else
+    const parsed = parseSession(fakeFile);
+    assert.equal(parsed.title, 'fake title');
+    assert.equal(parsed.cwd, '/Users/me/work/foo');
+    // …and the real formats still win their own files (specificity order intact)
+    const codex = join(dir, 'rollout.jsonl');
+    writeFileSync(codex, codexFixtureLines('/Users/me/work/bar'));
+    assert.equal(parseSession(codex).cwd, '/Users/me/work/bar');
+
+    // findCurrentTranscript surfaces the fake adapter's cwd-matched file with no built-in candidates
+    const opts = { claudeRoot: join(dir, 'no-claude'), codexRoot: join(dir, 'no-codex') };
+    assert.equal(findCurrentTranscript('/Users/me/work/foo', opts), fakeFile);
+    // …and joins the pure-recency fallback when nothing matches the cwd
+    assert.equal(findCurrentTranscript('/Users/elsewhere', opts), fakeFile);
+  } finally {
+    ADAPTERS.splice(ADAPTERS.indexOf(fake), 1); // never leak the fake into other tests
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('findCurrentTranscript: probeCap bounds the cwd probe; dashified prefix match is directory-exact', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'brain-cap-'));
+  const t = (s) => new Date(`2026-07-01T10:0${s}:00Z`);
+
+  // A fake adapter whose cwd match only recognizes the OLDER of its two files: with
+  // probeCap 1 only the newest file is probed, so the match must be invisible.
+  const fakeRoot = join(dir, 'capped-sessions');
+  mkdirSync(fakeRoot, { recursive: true });
+  const oldMatch = join(fakeRoot, 'old.jsonl');
+  const newOther = join(fakeRoot, 'new.jsonl');
+  writeFileSync(oldMatch, '{}');
+  writeFileSync(newOther, '{}');
+  utimesSync(oldMatch, t(1), t(1));
+  utimesSync(newOther, t(2), t(2));
+  const fake = registerAdapter({
+    name: 'capped',
+    root: fakeRoot,
+    detect: () => false,
+    parse: () => ({ turns: [], title: null, cwd: null }),
+    currentSessionCwdMatch: (f, cwd) => f === oldMatch && cwd === '/Users/me/work/foo',
+    probeCap: 1,
+  });
+  const claudeRoot = join(dir, 'claude-projects');
+  const opts = { claudeRoot, codexRoot: join(dir, 'no-codex') };
+  try {
+    assert.equal(findCurrentTranscript('/Users/me/work/foo', opts), newOther,
+      'cap=1 probes only the newest file → the older match is unseen → pure-recency fallback');
+    fake.probeCap = 2;
+    assert.equal(findCurrentTranscript('/Users/me/work/foo', opts), oldMatch,
+      'raising the cap makes the older cwd-matched file win over newer unmatched ones');
+
+    // Directory-exact prefix: '-Users-me-work-fo' must NOT claim files under the
+    // sibling '-Users-me-work-foo' (a string prefix without the '/' boundary would).
+    const fooF = join(claudeRoot, '-Users-me-work-foo', 'sess.jsonl');
+    const foF = join(claudeRoot, '-Users-me-work-fo', 'sess.jsonl');
+    mkdirSync(dirname(fooF), { recursive: true });
+    mkdirSync(dirname(foF), { recursive: true });
+    writeFileSync(fooF, '{}');
+    writeFileSync(foF, '{}');
+    utimesSync(foF, t(3), t(3));
+    utimesSync(fooF, t(4), t(4)); // newest overall AND a string-prefix trap for '…-fo'
+    assert.equal(findCurrentTranscript('/Users/me/work/fo', opts), foF,
+      'only the exact dashified dir matches — the newer sibling with a shared prefix does not');
+  } finally {
+    ADAPTERS.splice(ADAPTERS.indexOf(fake), 1);
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('parseSession dispatches by content: rollout → codex parser, transcript → claude parser', () => {

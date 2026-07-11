@@ -16,7 +16,7 @@ import { statSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { openDb, vecToBlob, stats, diffChunks } from './store.mjs';
-import { parseSession, projectFromPath, gitRootName, chunkText, redact, walkJsonl, CLAUDE_PROJECTS, CODEX_SESSIONS } from './transcripts.mjs';
+import { parseSession, projectFromPath, gitRootName, chunkText, redact, walkJsonl, ADAPTERS } from './transcripts.mjs';
 
 // OPT-IN: by default NOTHING is indexed. Only sessions whose transcript is listed in
 // keep.list get indexed. Entries are added by `BRAIN=1 claude` (the mark-keep.mjs
@@ -46,8 +46,8 @@ if (has('--stats')) {
 let embed = null;
 if (!NO_EMBED) ({ embed } = await import('./embed.mjs'));
 
-// Both hosts' session stores; either may be absent (walkJsonl returns [] then).
-const files = [...walkJsonl(CLAUDE_PROJECTS), ...walkJsonl(CODEX_SESSIONS)];
+// Every registered adapter's session store; any may be absent (walkJsonl returns [] then).
+const files = ADAPTERS.flatMap(a => walkJsonl(a.root));
 const getSession    = db.prepare('SELECT mtime, bytes FROM sessions WHERE path = ?');
 const delChunks     = db.prepare('DELETE FROM chunks WHERE path = ?');
 const delChunkById  = db.prepare('DELETE FROM chunks WHERE id = ?');

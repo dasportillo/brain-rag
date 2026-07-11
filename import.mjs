@@ -7,7 +7,7 @@
 import { readFileSync, existsSync, appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { walkJsonl, codexHeadCwd, gitRootName, CLAUDE_PROJECTS, CODEX_SESSIONS } from './transcripts.mjs';
+import { walkJsonl, codexHeadCwd, gitRootName, ADAPTERS, CODEX_SESSIONS } from './transcripts.mjs';
 
 const args = process.argv.slice(2);
 const DRY = args.includes('--dry');
@@ -21,12 +21,12 @@ const KEEP = join(BRAIN_DIR, 'keep.list');
 const projOf = (f) => f.match(/\/projects\/([^/]+)\//)?.[1]
   || (f.startsWith(CODEX_SESSIONS) ? `${gitRootName(codexHeadCwd(f)) ?? '?'} (codex)` : '?');
 
-let files = [...walkJsonl(CLAUDE_PROJECTS), ...walkJsonl(CODEX_SESSIONS)];
+let files = ADAPTERS.flatMap(a => walkJsonl(a.root));
 // Codex rollout paths are date/uuid-named, so match the filter against the project label too.
 if (filter) files = files.filter(f => f.includes(filter) || projOf(f).includes(filter));
 
 if (!files.length) {
-  console.log(`No transcripts${filter ? ` matching "${filter}"` : ''} found under ${CLAUDE_PROJECTS} or ${CODEX_SESSIONS}.`);
+  console.log(`No transcripts${filter ? ` matching "${filter}"` : ''} found under ${ADAPTERS.map(a => a.root).join(' or ')}.`);
   process.exit(0);
 }
 const byProj = {};

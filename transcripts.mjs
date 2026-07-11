@@ -1,8 +1,9 @@
-// Parse, chunk, and redact session transcripts from both hosts:
-//   - Claude Code project transcripts (~/.claude/projects/**/*.jsonl)
-//   - Codex session rollouts        (~/.codex/sessions/**/rollout-*.jsonl)
-// Both normalize to the same { turns, title, cwd } shape, so everything downstream
-// (chunking, redaction, embeddings, store) is host-agnostic.
+// Parse, chunk, and redact session transcripts from every registered host adapter:
+//   - claude-code: Claude Code project transcripts (~/.claude/projects/**/*.jsonl)
+//   - codex:       Codex session rollouts          (~/.codex/sessions/**/rollout-*.jsonl)
+// Every adapter normalizes to the same { turns, title, cwd } shape, so everything downstream
+// (chunking, redaction, embeddings, store) is host-agnostic. Adding a third agent = one
+// registerAdapter() call (see ADAPTERS below and docs/ADAPTERS.md) — no dispatch code changes.
 import { readFileSync, existsSync, readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { dirname, basename, join } from 'node:path';
 import { homedir } from 'node:os';
@@ -234,12 +235,58 @@ export function parseCodexRollout(filePath) {
   return { turns, title: codexTitle(sessionId), cwd };
 }
 
-// One entry point for both formats: sniff the file, dispatch to the right parser.
-export function parseSession(filePath) {
-  return isCodexRollout(filePath) ? parseCodexRollout(filePath) : parseTranscript(filePath);
+// ---------------------------------------------------------------------------
+// Adapter registry — the ONE place that knows which agents write transcripts.
+// ---------------------------------------------------------------------------
+// An adapter describes one agent's session store:
+//   name                    — stable id ('claude-code', 'codex', …)
+//   root                    — absolute dir the agent writes sessions under
+//   detect(filePath)        — cheap format sniff (path or file head; never a full parse)
+//   parse(filePath)         — normalize to { turns, title, cwd }
+//   currentSessionCwdMatch(filePath, cwd, root) — does this file belong to a session
+//     launched from `cwd`? (root is passed so tests can re-root an adapter)
+//   probeCap (optional)     — when the cwd match costs I/O (reads the file head), only the
+//     newest N files are probed in findCurrentTranscript; omit for pure-string matches.
+// Everything generic (dispatch, discovery, current-session lookup) iterates ADAPTERS, so a
+// third agent is one registerAdapter() call — see docs/ADAPTERS.md for the recipe.
+export const ADAPTERS = [];
+export function registerAdapter(adapter) {
+  ADAPTERS.push(adapter);
+  return adapter;
 }
 
-// All .jsonl transcripts under a root (either host's store); [] when the root doesn't exist.
+// Claude Code nests transcripts under the cwd with '/' and '_' replaced by '-'.
+const dashify = (cwd) => String(cwd).replace(/[/_]/g, '-');
+
+// Detection order = specificity: codex first (its first line IS a definitive marker), then
+// claude-code (per-line session fields — also parseSession's fallback, so a miss is harmless).
+registerAdapter({
+  name: 'codex',
+  root: CODEX_SESSIONS,
+  detect: isCodexRollout, // first line is its session_meta — unambiguous
+  parse: parseCodexRollout,
+  currentSessionCwdMatch: (filePath, cwd) => codexHeadCwd(filePath) === cwd,
+  probeCap: 200, // the cwd match reads the file head — probe only the newest N rollouts
+});
+registerAdapter({
+  name: 'claude-code',
+  root: CLAUDE_PROJECTS,
+  // No single-line marker like codex's; every transcript line carries session ids instead.
+  detect: (filePath) => /"(sessionId|parentUuid|leafUuid)"/.test(fileHead(filePath, 512)),
+  parse: parseTranscript,
+  // Pure string check (no I/O): the file lives under the dashified-cwd project dir.
+  currentSessionCwdMatch: (filePath, cwd, root = CLAUDE_PROJECTS) =>
+    filePath.startsWith(join(root, dashify(cwd)) + '/'),
+});
+
+// One entry point for every format: registry lookup via detect. Undetected files get the
+// claude-code parser — the historical default, and harmless on foreign .jsonl (yields no turns).
+export function parseSession(filePath) {
+  const adapter = ADAPTERS.find(a => a.detect(filePath));
+  return adapter ? adapter.parse(filePath) : parseTranscript(filePath);
+}
+
+// All .jsonl transcripts under a root (any adapter's store); [] when the root doesn't exist.
 export function walkJsonl(dir) {
   if (!existsSync(dir)) return [];
   return readdirSync(dir, { withFileTypes: true }).flatMap(e => {
@@ -248,20 +295,27 @@ export function walkJsonl(dir) {
   });
 }
 
-// The transcript being written RIGHT NOW: the newest .jsonl across both hosts' stores,
+// The transcript being written RIGHT NOW: the newest .jsonl across every adapter's store,
 // preferring candidates that belong to this cwd so a busy parallel session in another
 // project doesn't steal the match. Used by keep_session and mark-current.
+// { claudeRoot, codexRoot } re-root the two built-in adapters (the historical test surface).
 export function findCurrentTranscript(cwd, { claudeRoot = CLAUDE_PROJECTS, codexRoot = CODEX_SESSIONS } = {}) {
-  // Claude nests transcripts under the dashified cwd; Codex records the cwd on the
-  // rollout's first line (probed newest-first, capped).
-  const projDir = join(claudeRoot, String(cwd).replace(/[/_]/g, '-'));
-  const claudeMatched = existsSync(projDir) ? walkJsonl(projDir) : [];
-  const codexByMtime = walkJsonl(codexRoot)
-    .map(f => ({ f, m: statSync(f).mtimeMs }))
-    .sort((a, b) => b.m - a.m)
-    .map(x => x.f);
-  const codexMatched = codexByMtime.slice(0, 200).filter(f => codexHeadCwd(f) === cwd);
-
+  const overrides = { 'claude-code': claudeRoot, codex: codexRoot };
+  const all = [], matched = [];
+  for (const a of ADAPTERS) {
+    const root = overrides[a.name] ?? a.root;
+    const files = walkJsonl(root);
+    all.push(...files);
+    // Cap-aware probe: when the cwd match reads the file (probeCap set), only the newest
+    // probeCap files are checked; pure-string matches check everything.
+    let probe = files;
+    const cap = a.probeCap ?? Infinity;
+    if (files.length > cap) {
+      probe = files.map(f => ({ f, m: statSync(f).mtimeMs }))
+        .sort((x, y) => y.m - x.m).slice(0, cap).map(x => x.f);
+    }
+    for (const f of probe) if (a.currentSessionCwdMatch(f, cwd, root)) matched.push(f);
+  }
   const newest = (files) => {
     let best = null, bestM = -1;
     for (const f of files) {
@@ -270,11 +324,10 @@ export function findCurrentTranscript(cwd, { claudeRoot = CLAUDE_PROJECTS, codex
     }
     return best;
   };
-  // Prefer transcripts that provably belong to this cwd; only when NEITHER store can be
-  // matched (e.g. the MCP server was launched with an unrelated cwd) fall back to pure
-  // recency across everything. Null when neither store has transcripts at all.
-  return newest([...claudeMatched, ...codexMatched])
-    ?? newest([...walkJsonl(claudeRoot), ...codexByMtime]);
+  // Prefer transcripts that provably belong to this cwd; only when NO store can be matched
+  // (e.g. the MCP server was launched with an unrelated cwd) fall back to pure recency
+  // across everything. Null when no store has transcripts at all.
+  return newest(matched) ?? newest(all);
 }
 
 // Splits a long text into ~size-char windows with overlap.
