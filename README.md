@@ -9,7 +9,7 @@ Brain-RAG makes sure it never has to rediscover your project again.**
 
 [![npm version](https://img.shields.io/npm/v/brain-rag?color=cb3837&logo=npm)](https://www.npmjs.com/package/brain-rag)
 [![node](https://img.shields.io/node/v/brain-rag?color=339933&logo=node.js&logoColor=white)](#installation)
-[![license](https://img.shields.io/npm/l/brain-rag?color=blue)](LICENSE)
+[![license](https://img.shields.io/npm/l/brain-rag?color=blue)](https://github.com/dasportillo/brain-rag/blob/main/LICENSE)
 [![privacy](https://img.shields.io/badge/privacy-100%25_local-success)](#-privacy)
 [![agents](https://img.shields.io/badge/works_with-Claude_Code_·_Codex_·_any_MCP_agent-8A2BE2)](#installation)
 
@@ -190,12 +190,12 @@ flowchart LR
 - **Anti prompt-injection**: everything retrieved is wrapped as *historical evidence, not instructions* — old conversations can't steer the current session.
 - **Cross-project hygiene**: results spanning projects are faceted (the same word can mean different things per project), and fragmented project names can be merged via `aliases.json`.
 
-The full deep dive lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); every CLI command, MCP tool, flag and env var is in [`docs/REFERENCE.md`](docs/REFERENCE.md).
+The full deep dive lives in [`docs/ARCHITECTURE.md`](https://github.com/dasportillo/brain-rag/blob/main/docs/ARCHITECTURE.md); every CLI command, MCP tool, flag and env var is in [`docs/REFERENCE.md`](https://github.com/dasportillo/brain-rag/blob/main/docs/REFERENCE.md).
 </details>
 
 ## 📊 Benchmarks
 
-Retrieval quality is **measured, not eyeballed** — a labeled eval of real known-item questions runs against the real corpus, and every retrieval change must beat the previous baseline to ship ([method & history](docs/EVAL-BASELINE.md)).
+Retrieval quality is **measured, not eyeballed** — a labeled eval of real known-item questions runs against the real corpus, and every retrieval change must beat the previous baseline to ship ([method & history](https://github.com/dasportillo/brain-rag/blob/main/docs/EVAL-BASELINE.md)).
 
 | Metric | Value |
 |---|---|
@@ -264,7 +264,7 @@ Roughly 100–200 MB for the model (one-time) plus a database that grows with yo
 
 ## 🗺️ Roadmap
 
-Brain-RAG is evolving from *searchable history* into a full **long-term memory system** — the plan and its principles live in [`docs/ROADMAP.md`](docs/ROADMAP.md):
+Brain-RAG is evolving from *searchable history* into a full **long-term memory system** — the plan and its principles live in [`docs/ROADMAP.md`](https://github.com/dasportillo/brain-rag/blob/main/docs/ROADMAP.md):
 
 - ✅ Hybrid retrieval (semantic + exact-term + recency), measured by a growing eval suite
 - ✅ Layer 2: distilled, typed memories with provenance and temporal lifecycle
@@ -276,13 +276,13 @@ Brain-RAG is evolving from *searchable history* into a full **long-term memory s
 
 ## 🤝 Contributing
 
-Contributions are welcome — and the bar is refreshingly objective: **retrieval changes must beat the eval baseline** ([`docs/EVAL-BASELINE.md`](docs/EVAL-BASELINE.md)), everything else needs tests (`npm test`, no model download required).
+Contributions are welcome — and the bar is refreshingly objective: **retrieval changes must beat the eval baseline** ([`docs/EVAL-BASELINE.md`](https://github.com/dasportillo/brain-rag/blob/main/docs/EVAL-BASELINE.md)), everything else needs tests (`npm test`, no model download required).
 
 Great places to start:
 
 - 🧪 Grow the eval: more case kinds, more languages
 - 🔌 Adapters: transcript formats for more agents (Cursor, Windsurf, VS Code agent mode)
-- 🧹 The [roadmap](docs/ROADMAP.md) 🔜 items above
+- 🧹 The [roadmap](https://github.com/dasportillo/brain-rag/blob/main/docs/ROADMAP.md) 🔜 items above
 
 ```bash
 git clone https://github.com/dasportillo/brain-rag.git && cd brain-rag
