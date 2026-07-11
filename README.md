@@ -1,348 +1,302 @@
-# brain-rag
+<div align="center">
 
-A local, private **"second brain"** over your Claude Code **and Codex** conversations. It indexes
-the chat transcripts you **opt in** into a searchable vector store and exposes it back to both
-agents as an MCP server, so any future session can recover the exact context of what you were
-working on — across every project, no matter which agent you were using.
+# 🧠 Brain-RAG
 
-Everything runs **locally**: local embedding model, on-disk SQLite, zero external APIs. Your
-transcripts (which contain secrets) never leave the machine.
+### Persistent memory for AI coding agents
+
+**Your AI assistant forgets everything the moment a session ends.<br/>
+Brain-RAG makes sure it never has to rediscover your project again.**
+
+[![npm version](https://img.shields.io/npm/v/brain-rag?color=cb3837&logo=npm)](https://www.npmjs.com/package/brain-rag)
+[![node](https://img.shields.io/node/v/brain-rag?color=339933&logo=node.js&logoColor=white)](#installation)
+[![license](https://img.shields.io/npm/l/brain-rag?color=blue)](LICENSE)
+[![privacy](https://img.shields.io/badge/privacy-100%25_local-success)](#-privacy)
+[![agents](https://img.shields.io/badge/works_with-Claude_Code_·_Codex_·_any_MCP_agent-8A2BE2)](#installation)
+
+[Install](#installation) · [Quick start](#-quick-start) · [How it works](#%EF%B8%8F-architecture) · [Benchmarks](#-benchmarks) · [FAQ](#-faq)
+
+</div>
 
 ---
 
-## Why
+<!-- TODO: docs/demo.gif — record with vhs/asciinema: ask "where did I leave off?" in a fresh session and watch the agent answer from memory -->
 
-Work gets scattered across chats. You lose the thread of what you decided, what's in flight, and why.
-Claude Code already stores every session as a `.jsonl` transcript under `~/.claude/projects/`, and
-Codex keeps its rollouts under `~/.codex/sessions/` — the raw material already exists. `brain-rag`
-turns those hundreds of sessions into one recallable memory.
+```text
+$ claude    # fresh session, zero context given
 
-## What it does
+> where did I leave off on the payments service?
 
-- **Ingests** only the transcripts you **opt in** (from `~/.claude/projects/**/*.jsonl` and `~/.codex/sessions/**/*.jsonl`) — the brain is OFF by default. Both formats normalize to the same shape, so one index serves both agents.
-- **Chunks + embeds** the useful turns (user prompts + assistant text) with a local model; context-compaction **summaries** are kept whole (tagged `summary`) and each session's **title** is attached to every hit.
-- **Stores** them in a single on-disk SQLite database with cosine search.
-- **Serves** its tools over MCP so Claude Code and Codex can query your history from any project:
-  - `search_context({query, project?, k?, since?})` — semantic search over past conversations.
-  - `list_projects()` — indexed projects with session/chunk counts and last activity.
-  - `get_state({project?})` — curated "current state" note for a project (the precise layer).
-  - `save_state({content, project?})` — write/refresh that curated note (overwrites; drops stale decisions).
-  - `save_memories({memories[]})` — write **distilled knowledge** (Layer 2): typed memories (decision/bug/solution/…) with provenance, refresh-by-title and explicit supersede. `search_context` surfaces them above raw history (`layer` param); `/distill` extracts them from the current conversation.
-- **Opt-in by default** — a session is saved only via `claude --brain`, the `/brain` command, or being listed in `keep.list`; a `SessionEnd` hook then incrementally re-indexes the sessions you opted in.
+⏺ brain · get_state(payments-service)
+  You were mid-migration to the new ledger API. Decided on Tuesday to keep
+  idempotency keys in Postgres (not Redis) — see the outbox pattern note.
+  Two TODOs open: retry policy for webhooks, and the staging credentials
+  rotation you postponed.
 
-## Architecture
+> why did we drop Redis for idempotency?
 
-```
-~/.claude/projects/**/*.jsonl          (Claude Code transcripts — only the ones you opt in)
-~/.codex/sessions/**/*.jsonl           (Codex rollouts — same opt-in, same index)
-        │  ingest.mjs   (opt-in filter via keep.list → parse → redact → chunk → embed → upsert)
-        ▼
-  brain.db  (node:sqlite, embeddings as BLOB, brute-force cosine search)
-        ▲
-        │  MCP tools
-  server.mjs  (MCP server) ── search_context · list_projects · get_state
-        ▲
-        │  registered globally (claude mcp add --scope user · codex mcp add)
-   Claude Code / Codex (in ANY repo) ── queries your second brain
+⏺ brain · search_context("idempotency keys Redis vs Postgres")
+  Decision (3 weeks ago): Redis eviction under memory pressure could drop
+  keys mid-flight → double-charges. Postgres keeps them transactional with
+  the write itself. You benchmarked it: +4ms p99, considered acceptable.
 ```
 
-### Design decisions (and why)
+**No re-explaining. No re-discovering. No "as I mentioned in another chat".**
 
-| Choice | Why |
+---
+
+## 💡 Why Brain-RAG exists
+
+Every day, AI coding agents start from zero:
+
+- 🔁 You re-explain the architecture you already explained last week
+- 🐛 Your agent re-discovers the bug you fixed together a month ago
+- ❓ Nobody remembers **why** a decision was made — only that the code looks like this
+- 📉 The context you build in every session — hundreds of hours of it — **evaporates**
+
+Here's the thing: **that context already exists.** Claude Code and Codex save every session as a transcript on your machine. Hundreds of conversations documenting every decision, every fix, every dead end — sitting in a folder, unused.
+
+Brain-RAG turns that archive into **long-term memory your agents actually use** — automatically, from any project, in any session, with any agent.
+
+> **Brain-RAG is not another chatbot memory, not another vector database, not another RAG demo.**
+> It's the memory layer your AI coding workflow is missing — built for real engineering work: decisions with their *why*, knowledge that gets outdated, projects that span months, and privacy that isn't negotiable.
+
+## ✨ Features
+
+| | |
 |---|---|
-| **Local embeddings** (`Xenova/multilingual-e5-small`, 384-dim) — not a cloud API | Transcripts contain secrets (JWTs, AWS keys, DB passwords). Local = private, free, offline. Multilingual because the corpus mixes languages (see Evaluation). |
-| **`node:sqlite`** (Node's built-in SQLite) | Zero native compilation. Ships with Node 22.5+. |
-| **Hybrid retrieval**: brute-force cosine in JS + **FTS5/BM25**, fused with RRF — no `pgvector`, no vector DB | Vector alone misses exact terms; lexical alone misses paraphrase. Fused: R@8 0.97 at p50 ~90 ms over 30k chunks (see `docs/EVAL-BASELINE.md`). No server, no Docker to keep running. |
-| **Embedded store, always-on** | A personal brain must answer from any project at any time, even if no daemon is up. |
-| **Redaction at ingest** | JWTs / `AKIA…` / private keys / tokens are scrubbed before anything is stored. |
+| 🧠 **Remembers decisions — and the *why*** | Ask *"why did we drop Redis?"* and get the actual reasoning from the actual conversation, with dates and sources. |
+| 📌 **Distilled memories, not just chat logs** | `/distill` turns a working session into typed, self-contained knowledge: decisions, bug root causes, solutions, lessons. Each memory keeps a link back to the exact conversation that produced it. |
+| 🕰️ **Knows what's current vs outdated** | Knowledge changes. When newer information supersedes older, your agent sees it flagged — it won't resurrect a plan you reverted two weeks ago. |
+| 📍 **"Where did I leave off?"** | A curated per-project state note — what's in flight, what's decided, what's blocked, what's next — ready the moment you ask. |
+| 🔀 **One memory, all your agents** | Claude Code and Codex share the same brain out of the box. Any MCP-compatible agent (Cursor, Windsurf, VS Code) can connect. Your memory belongs to **you**, not to a vendor. |
+| ⚡ **Instant recall** | Finds the right moment across tens of thousands of indexed conversation fragments in ~90 ms — including exact identifiers like error strings, function names, and ARNs. |
+| 🔒 **100% local** | Local embedding model, local database, zero external API calls. Your conversations — which contain your secrets — never leave your machine. |
+| 🎛️ **Opt-in by default** | Nothing is saved unless you say so. One command opts a session in; everything else is forgotten. |
 
-### Why hybrid (RAG + structured state)
+## 🎬 Real examples
 
-RAG is **fuzzy recall**: great for *"what did we decide about X weeks ago?"*, but risky for *"what's
-the current state?"* — it can resurface a reverted decision as if it were live. So `get_state`
-provides a **precise, curated** layer (`state/<project>.md`) that complements the fuzzy vector search.
+Things you can ask in a **brand-new session**, in any project, that Brain-RAG answers from your history:
 
-| Question | Tool | Precision |
-|---|---|---|
-| "what am I working on **today** in X?" | `get_state(X)` | exact (curated) |
-| "what did we ever discuss about X?" | `search_context` | fuzzy (high recall) |
+```text
+"How did we solve the 502 on large document uploads?"
+ → the fix, the root cause (payload limit mismatch between services), and the date
 
----
+"What did we decide about tenant isolation in the shared database?"
+ → row-level security via entity_id, plus the alternatives you rejected and why
 
-## Install
+"Have I dealt with this EventBridge → Lambda permission error before?"
+ → yes: the exact recurring deploy failure and the ARN fix, from two months ago
 
-Requires **Node 22.5+** (built-in `node:sqlite`). Tested on Node 25.
+"¿Qué reglas disparan la auditoría VCO?"  🇪🇸
+ → works in Spanish and English, even mixed in the same history
+```
 
-### Via npm (recommended)
+## 📦 Installation
+
+Requires **Node 22.5+**.
 
 ```bash
 npx -y brain-rag install
 ```
 
-Registers the MCP server, installs the `/brain` and `/state` slash commands, and prints the opt-in
-hook wiring for `~/.claude/settings.json`. It is **npx-native** — the code runs straight from the npm
-package, nothing is copied; only the index and state notes live under `~/.claude/brain/`.
+That's it. The installer registers the memory server with **Claude Code** and **Codex** (if present), installs the `/brain`, `/state` and `/distill` commands in both, and prints the optional automation hooks.
 
-Just the search side (no ingestion/hooks) — point Claude Code straight at the server:
+<details>
+<summary><b>Other MCP agents (Cursor, Windsurf, VS Code, …)</b></summary>
 
-```bash
-claude mcp add brain --scope user -- npx -y brain-rag serve
-```
-
-The `brain-rag` CLI also exposes `import` (backfill past conversations), `forget` (remove sessions
-from the index), `relabel` (re-derive project names by git repo after upgrading), `ingest`,
-`search`, `stats`, and `state` (`brain-rag help`).
-
-**Import your existing conversations.** The brain is opt-in, so past chats aren't indexed until you
-bring them in:
-
-```bash
-brain-rag import           # all previous conversations
-brain-rag import myproj    # only projects matching "myproj"
-brain-rag import --dry     # preview — writes nothing, embeds nothing
-```
-
-To uninstall: `npx -y brain-rag uninstall` (unregisters the MCP from both agents + removes the
-slash commands/prompts; add `--purge` to also delete the index and state notes).
-
-### Codex (OpenAI)
-
-`npx -y brain-rag install` detects `~/.codex` and wires Codex too: it registers the MCP server
-(`codex mcp add brain -- npx -y brain-rag serve`) and installs `/brain` + `/state` as custom
-prompts under `~/.codex/prompts/`. Manual registration, if you prefer `~/.codex/config.toml`:
-
-```toml
-[mcp_servers.brain]
-command = "npx"
-args = ["-y", "brain-rag", "serve"]
-```
-
-Two Codex-specific notes:
-
-- **Nudge the model.** Codex doesn't surface MCP instructions as prominently as Claude Code, so add
-  a short section to `~/.codex/AGENTS.md` telling it when to reach for the brain (the installer
-  prints a ready-to-paste snippet).
-- **No session-end hook.** Codex sessions you opt in with `/brain` are picked up by the next ingest
-  run — in practice the Claude Code `SessionEnd` hook keeps both corpora fresh; or run
-  `npx -y brain-rag ingest` manually / on a schedule.
-
-### From source
-
-```bash
-git clone git@github.com:dasportillo/brain-rag.git
-cd brain-rag
-./install.sh
-```
-
-`install.sh` will:
-1. Copy the runtime into `~/.claude/brain/` and the `/brain` command into `~/.claude/commands/`.
-2. `npm install` (embedding model + MCP SDK).
-3. Register the MCP server globally (`claude mcp add brain --scope user`).
-4. Print the **opt-in wiring** to add to `~/.claude/settings.json` (the `SessionStart` mark hook + the `SessionEnd` ingest hook) and the optional `claude --brain` shell wrapper.
-
-The brain is **opt-in**: nothing is indexed until you opt a session in, so there is no bulk backfill.
-
-> The runtime lives at `~/.claude/brain/`; this repo is the source of truth. Re-run `./install.sh`
-> after pulling changes.
-
-## Usage
-
-### From Claude Code (MCP)
-Once registered, in any project the model can call:
-- `search_context({ query: "how the users↔documents bridge works" })`
-- `search_context({ query: "audit hash chain", project: "my-project" })`
-- `list_projects()`
-- `get_state({ project: "my-project" })`
-
-### From the CLI
-```bash
-node search.mjs "how does the incremental index work"
-node search.mjs --project my-project "role-based access"
-node ingest.mjs --stats
-node eval.mjs        # run the recall eval (see Evaluation)
-```
-
-### Temporal version signal in search
-
-Search preserves **recall** — nothing is dropped — but a raw list of hits can't tell you *"is this
-the current version of the plan, or an old draft?"*. So after ranking, `search_context` (and
-`search.mjs`) compare the returned results pairwise: when two hits are near-duplicate in **topic**
-(embedding cosine ≥ **0.92**) but carry **different dates**, they're the same thing at two points in
-time, and the results are annotated accordingly:
-
-- the older hit is marked **⚠️ SUPERSEDED**, pointing at the newer date;
-- the newest hit is marked **✅ latest of N versions**, listing the older dates it supersedes.
-
-This is a **signal only** — every version stays in the results — so you can distinguish the live
-version of a decision from an earlier revision without losing the history that led to it.
-
-### Cross-project facet in search
-
-When one query's results blend several projects, search says so up front — `📂 Results span N
-projects: a (4) · b (3) …` — because the same term can mean different things per project (a
-financial event *audit-log* vs medical-claims *"auditoría"*) and an inline blend goes unnoticed.
-Counts only, ranking untouched. It deliberately does **not** try to flag which project is
-"off-topic": measured on a live corpus, centroid and query-residual similarities between
-false-friend project pairs (0.78–0.83) overlap same-product pairs (0.68–0.84), so no threshold
-separates them — a flag would be wrong too often to trust. The reader (usually the model) sees the
-blend and scopes with `project:` when needed.
-
-### Current state layer (`get_state` / `save_state`)
-
-`get_state` serves a curated `state/<project>.md` — the precise "where am I parked today" note that
-complements the fuzzy recall of `search_context`. Refresh it with the **`/state`** command, which
-drives the in-session model to gather recent activity, synthesize the note, and persist it via
-`save_state` — **no external API**, the LLM is already in the loop:
-
-```bash
-node state.mjs --list         # projects with activity
-node state.mjs my-notes        # dump a project's recent material (what /state feeds on)
-```
-
-`/state [project]` then writes `state/<project>.md` (Now / In flight / Decisions / Blockers / Next).
-Overwriting is deliberate: it removes stale/reverted decisions instead of letting them resurface. The
-notes are gitignored — they contain your work details.
-
-When **no curated note exists**, `get_state` no longer dead-ends: it falls back to the project's
-recent indexed activity (last 30 days, deduped, clearly marked *NOT curated*) so the caller gets raw
-material to work from — and a nudge to synthesize and `save_state` the real note.
-
-### Project aliases (`aliases.json`)
-
-A project is named by its **git repo** (the repo the session's cwd lives in), so the same repo is one
-project no matter which subdirectory Claude was launched in. That removes most fragmentation on its
-own. What it deliberately does *not* do is merge **separate repos** that you think of as one product
-(e.g. an `efy3` workspace of 15 independent service repos) — no heuristic gets that right for
-everyone, so it's left as opt-in. An **optional** `~/.claude/brain/aliases.json`
-merges those repos into one **canonical** project:
+Brain-RAG speaks the open Model Context Protocol over stdio, so any MCP client can use the same memory. Point your agent at:
 
 ```json
-{ "efy3": ["efy3-users", "efy3-bff", "ledger-core", "efy-transactions"] }
+{ "mcpServers": { "brain": { "command": "npx", "args": ["-y", "brain-rag", "serve"] } } }
 ```
 
-Each key is the canonical name; its array lists the repo names (as shown by `list_projects` /
-`brain-rag list`) that fold into it. With this in place:
+or the equivalent in your client's MCP configuration. All tools (`search_context`, `get_state`, `save_state`, `save_memories`, `keep_session`) work identically.
+</details>
 
-- **`list_projects`** collapses the fragments into a single row (summed counts, newest activity);
-- **search filtering** — a `--project` / `project` filter on the canonical name matches **all**
-  members, so one query spans every fragment;
-- **`get_state` / `save_state`** read and write a single `state/<canonical>.md`.
-
-An **absent or malformed** file means identity — zero behavior change, so it's safe to skip. One
-caveat: don't merge in a project whose sessions are actually off-topic (e.g. a tool built inside
-another repo's workspace) — that folds unrelated chatter into the canonical project and
-re-introduces the contamination search-time de-dup was added to remove.
-
-## Evaluation
-
-Retrieval quality is measured, not eyeballed. `eval.mjs` runs a labeled set of **known-item**
-queries (`eval-cases.json`, or your real gitignored `eval-cases.local.json`) — each a
-natural-language paraphrase of something known to be in the corpus — and checks whether the correct
-content appears in the top-K. It reports **Recall@1/5/K**, **MRR**, **nDCG@K**, search **latency**
-p50/p95, and **context size**, sliced by case `kind`/`lang` when cases carry that metadata. Chunks
-containing the literal query are ignored (self-echo guard: an indexed eval session must not grade
-itself).
+<details>
+<summary><b>Manual registration / from source</b></summary>
 
 ```bash
-node eval.mjs            # K=8
-node eval.mjs 8 --json   # machine-readable — paste into docs/EVAL-BASELINE.md
+# just the memory server, no commands or hooks
+claude mcp add brain --scope user -- npx -y brain-rag serve
+codex mcp add brain -- npx -y brain-rag serve
+
+# from source
+git clone https://github.com/dasportillo/brain-rag.git && cd brain-rag && ./install.sh
 ```
 
-The running baseline lives in [`docs/EVAL-BASELINE.md`](docs/EVAL-BASELINE.md) — update it in every
-retrieval-touching PR.
+To uninstall: `npx -y brain-rag uninstall` (add `--purge` to also delete the index and notes).
+</details>
 
-This is the loop that turns "a RAG that runs" into "a RAG that works": measure → diagnose → fix →
-re-measure. A concrete example from this project: the first eval (English `all-MiniLM-L6-v2`) scored
-80% Recall@5, and the two misses were both **cross-lingual** — the corpus is bilingual
-(Spanish/English) and the English-only model couldn't bridge an English query to Spanish content
-(scores jumped from ~0.60 to ~0.82 when the same query was asked in Spanish). Switching to a
-**multilingual** model addressed exactly that failure mode. Add cases to `eval-cases.json` as you
-find gaps.
+## 🚀 Quick start
 
-### LLM-as-judge (the trustworthy instrument)
-
-Keyword matching (`eval.mjs`) is fast but **overcounts** — a chunk can contain the marker token yet
-be irrelevant, and a relevant chunk in another language contains no English marker at all. So the
-authoritative eval is `eval-judge.mjs`, which decouples retrieval from judging:
+**1 · Give your agent its memory back** — import the conversations you already have:
 
 ```bash
-node eval-judge.mjs --emit                 # retrieve top-K per query -> eval-bundle.json
-# an LLM judges which results are actually relevant -> verdicts.json
-node eval-judge.mjs --score verdicts.json  # Recall@K / MRR / P@K from judged relevance
+npx -y brain-rag import          # index your existing history (runs locally)
+npx -y brain-rag import --dry    # preview first
 ```
 
-The judge decides relevance by **meaning**, language- and keyword-agnostic. On this corpus the
-keyword eval reported 50–80% Recall@5 while the LLM-judged eval reported **30%** — the gap *is* the
-overcounting. 30% became the honest baseline to improve against.
+**2 · Ask.** Open your agent in any project and ask *"where did I leave off?"*, *"what do we know about this repo?"*, *"how did I solve X?"*. The agent queries the brain on its own.
 
-Acting on the misses **doubled it to 60% Recall@5** (MRR 0.18 → 0.47) with four changes, each
-re-measured on the same judge: a real retrieval model (`multilingual-e5-small` with `query:`/`passage:`
-prefixes) instead of a paraphrase model, **search-time de-duplication** of identical chunks that
-appear under two project paths, purging harness noise (`clean.mjs` removes task/tool notifications
-that polluted retrieval), and toning down the recency boost that was over-promoting today's sessions.
-Then adding **hybrid retrieval** (vector + lexical fused with Reciprocal Rank Fusion — pass
-`queryText` to `searchChunks`) took it to **80% Recall@5** (MRR 0.63): the exact-term queries that
-pure vectors missed (`groups-claim`, `SKIP_KEYS`) came back into the top-5. The two
-remaining misses need smaller chunks for very long multi-topic reports (a re-embed) — clear
-diminishing returns. `eval-bundle.json` / `verdicts.json` are gitignored (they contain transcript
-text).
+**3 · Keep it growing:**
 
-## How updating works (opt-in + incremental)
-
-The brain is **opt-in**: `ingest.mjs` only considers transcripts listed in `keep.list`. You add a
-session to it by starting with `claude --brain` (the `mark-keep.mjs` `SessionStart` hook) or by
-running `/brain` mid-conversation (`mark-current-keep.mjs`) — in Claude Code or in Codex; the
-current session is found across both stores by cwd match + recency.
-
-Among opted-in sessions it is **incremental**: each session is one `.jsonl` file and the `sessions`
-table stores its `(mtime, bytes)`, so on every run only new or grown files are re-indexed:
-
-```
-run:  1 processed, N skipped      ← only the opted-in session that grew was re-indexed
-```
-
-The `SessionEnd` hook fires this automatically (detached, non-blocking) when you close a session, so
-the brain stays current with no manual step.
-
-### Ingest flags
-| Flag | Effect |
+| Command | What it does |
 |---|---|
-| *(none)* | incremental, with embeddings |
-| `--no-embed` | parse/chunk/store only, fast, no model load |
-| `--limit N` | process at most N sessions (for testing) |
-| `--force` | re-process everything (e.g. to re-embed after a chunking change) |
-| `--stats` | print index status and exit |
+| `/brain` | Opt **this** session into memory (nothing is saved otherwise) |
+| `/distill` | Extract this session's durable knowledge — decisions, fixes, lessons — into typed memories |
+| `/state` | Update the curated "where I am today" note for the project |
 
-## Configuration (env vars)
+<details>
+<summary><b>Optional: automate it</b> — index on session end, opt in with a flag</summary>
 
-| Var | Default | Purpose |
-|---|---|---|
-| `BRAIN_DIR` | `~/.claude/brain` | where the DB and `state/` live |
-| `BRAIN_DB` | `$BRAIN_DIR/brain.db` | SQLite path |
-| `BRAIN_MODEL` | `Xenova/multilingual-e5-small` | local embedding model |
+Add to `~/.claude/settings.json` (the installer prints these ready to paste):
 
-## Roadmap
+```jsonc
+"SessionStart": [{ "matcher": "", "hooks": [{ "type": "command", "command": "npx -y brain-rag mark-keep", "timeout": 20 }] }],
+"SessionEnd":   [{ "matcher": "", "hooks": [{ "type": "command", "command": "nohup npx -y brain-rag ingest >> \"$HOME/.claude/brain/ingest.log\" 2>&1 &", "timeout": 30 }] }]
+```
 
-- Grow `eval-cases.json` well beyond 10 cases and exclude eval sessions from the corpus (avoid
-  overfitting and the RAG indexing its own eval runs).
-- Auto-refresh `state/<project>.md` on a cadence instead of on demand.
-- A stronger retrieval model (e.g. bge-m3) — measure only once the eval set is larger.
-- Optional connectors (Slack, other chat exports) as additional corpora.
+Then `BRAIN=1 claude` (or a `claude --brain` shell alias) starts a session that remembers itself, and every opted-in session is re-indexed automatically when it ends. Codex sessions ride the same ingest.
+</details>
 
-## Files
+## 🏗️ Architecture
 
-| File | Responsibility |
+Two layers, one principle: **raw history is never lost, distilled knowledge is never untraceable.**
+
+```mermaid
+flowchart LR
+    A["📜 Claude Code transcripts<br/>~/.claude/projects"] --> C
+    B["📜 Codex rollouts<br/>~/.codex/sessions"] --> C
+    C["Ingest<br/><i>opt-in · redact secrets · index</i>"] --> D[("🧠 brain.db<br/><i>one local file</i>")]
+    D --> E["Layer 1 · Raw archive<br/><i>every conversation, searchable</i>"]
+    D --> F["Layer 2 · Distilled memories<br/><i>decisions · bugs · solutions<br/>+ provenance + lifecycle</i>"]
+    E --> G["MCP server"]
+    F --> G
+    G --> H["🤖 Claude Code · Codex · Cursor ·<br/>any MCP agent, in any project"]
+```
+
+- **Layer 1 — the archive.** Every opted-in conversation, chunked and indexed. Immutable, complete, the source of truth.
+- **Layer 2 — the memory.** Typed, self-contained knowledge distilled from sessions (`decision`, `bug`, `solution`, `architecture`, …) with confidence, a temporal lifecycle (`active` → `superseded`), and links back to the exact source conversation. Nothing is generated without evidence.
+- **Retrieval** fuses semantic search (paraphrases, cross-language) with exact-term search (error strings, identifiers) and recency — because *"the groups-claim bug"* and *"why is RBAC broken"* should both find the same fix.
+
+<details>
+<summary><b>Under the hood</b> — for the technically curious</summary>
+
+- **Embeddings**: `Xenova/multilingual-e5-small` running locally via transformers.js — multilingual because real corpora mix languages. No API keys, works offline.
+- **Store**: Node's built-in SQLite (`node:sqlite`) — one file, zero native compilation, versioned schema migrations.
+- **Hybrid search**: brute-force cosine over cached candidate vectors + SQLite **FTS5/BM25** (diacritics-normalized), fused with Reciprocal Rank Fusion, recency as a gentle third signal. Measured: the lexical leg alone is worth ~10 points of Recall@8.
+- **Temporal signal**: near-duplicate results from different dates get flagged (`⚠️ superseded` / `✅ latest of N`) so stale plans never masquerade as current ones. Curated state notes and Layer-2 statuses complement it.
+- **Anti prompt-injection**: everything retrieved is wrapped as *historical evidence, not instructions* — old conversations can't steer the current session.
+- **Cross-project hygiene**: results spanning projects are faceted (the same word can mean different things per project), and fragmented project names can be merged via `aliases.json`.
+
+The full deep dive lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); every CLI command, MCP tool, flag and env var is in [`docs/REFERENCE.md`](docs/REFERENCE.md).
+</details>
+
+## 📊 Benchmarks
+
+Retrieval quality is **measured, not eyeballed** — a labeled eval of real known-item questions runs against the real corpus, and every retrieval change must beat the previous baseline to ship ([method & history](docs/EVAL-BASELINE.md)).
+
+| Metric | Value |
 |---|---|
-| `transcripts.mjs` | parse both `.jsonl` formats (Claude Code + Codex rollouts), chunk, redact secrets, find the current session |
-| `embed.mjs` | local embeddings (transformers.js) |
-| `store.mjs` | `node:sqlite` schema, cosine search, stats |
-| `ingest.mjs` | opt-in + incremental ingestion CLI |
-| `search.mjs` | CLI search |
-| `mark-keep.mjs` | `SessionStart` opt-in hook (`BRAIN=1` → `keep.list`) |
-| `mark-current-keep.mjs` | `/brain` backend — opt the current session in |
-| `commands/brain.md` | the `/brain` slash command (opt a session in) |
-| `commands/state.md` | the `/state` slash command (write the curated state note) |
-| `eval.mjs` + `eval-cases.json` | recall eval harness + labeled cases |
-| `server.mjs` | MCP server |
+| Recall@8 | **0.97** |
+| Recall@5 | 0.97 |
+| MRR | 0.828 |
+| nDCG@8 | 0.863 |
+| Search latency (p50 / p95) | **91 ms / 102 ms** |
+| Corpus | 560 sessions · 30,792 chunks · 46 projects |
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the deep dive.
+Ablation on the same set: vector-only search scores Recall@8 **0.87** — the exact-term leg is worth ~10 points, which is precisely the class of query (*error strings, function names, resource ids*) that matters in engineering work.
+
+## 🔒 Privacy
+
+Your conversations contain **API keys, internal architecture, unreleased plans**. Brain-RAG is built around that fact:
+
+- ✅ **Everything runs on your machine** — local embedding model, local database, zero external calls. Works offline.
+- ✅ **Secrets are scrubbed at ingest** — JWTs, AWS keys, GitHub/Slack tokens, private keys, `password=`-style values are redacted before anything is stored.
+- ✅ **Opt-in by default** — no session is indexed unless you opt it in (`/brain`, `BRAIN=1`, or an explicit `import`).
+- ✅ **Right to forget** — `brain-rag forget <filter>` removes sessions from the index; `uninstall --purge` deletes everything.
+- ✅ **Retrieved memory is evidence, not instructions** — wrapped so past content can never override your agent's current behavior.
+
+## ❓ FAQ
+
+<details>
+<summary><b>Does this send my code or conversations anywhere?</b></summary>
+
+No. The embedding model runs in-process, the database is a local file, and the server only talks to your agent over stdio. There is no telemetry, no cloud, no account.
+</details>
+
+<details>
+<summary><b>Will it slow my agent down?</b></summary>
+
+No — searches answer in ~90 ms at the median over a 30k-fragment corpus. The first run downloads the embedding model (~100 MB, one time).
+</details>
+
+<details>
+<summary><b>How is this different from my agent's built-in memory?</b></summary>
+
+Built-in memories are small, opaque, and locked to one vendor. Brain-RAG indexes your **entire working history**, keeps evidence for every memory (which conversation, which day, why), knows when knowledge is outdated, and serves **every agent you use** from the same store. The memory belongs to the developer, not the model.
+</details>
+
+<details>
+<summary><b>What if an old conversation contains something wrong or reverted?</b></summary>
+
+Three defenses: near-duplicate results from different dates are flagged (`superseded` / `latest of N`), Layer-2 memories carry an explicit lifecycle (`active`/`superseded`/`deprecated`), and the curated state note is the always-current answer to "what's true today". Retrieval prefers current knowledge; it never silently blends eras.
+</details>
+
+<details>
+<summary><b>What exactly gets stored?</b></summary>
+
+Only sessions you opt in. From those: user/assistant turns, session summaries, a compact trace of commands/files touched, and any distilled memories — all secret-redacted. You can inspect everything (`brain-rag search`, `brain-rag stats`) and delete anything (`forget`).
+</details>
+
+<details>
+<summary><b>Does it work with languages other than English?</b></summary>
+
+Yes — the embedding model is multilingual and the lexical index is diacritics-aware. The reference corpus is a real Spanish/English mix, and both languages score equally in the eval.
+</details>
+
+<details>
+<summary><b>How much disk does it use?</b></summary>
+
+Roughly 100–200 MB for the model (one-time) plus a database that grows with your opted-in history — ~2 MB per hundred conversation fragments. A year of heavy use fits comfortably under a gigabyte.
+</details>
+
+## 🗺️ Roadmap
+
+Brain-RAG is evolving from *searchable history* into a full **long-term memory system** — the plan and its principles live in [`docs/ROADMAP.md`](docs/ROADMAP.md):
+
+- ✅ Hybrid retrieval (semantic + exact-term + recency), measured by a growing eval suite
+- ✅ Layer 2: distilled, typed memories with provenance and temporal lifecycle
+- ✅ Multi-agent: Claude Code + Codex sharing one brain
+- 🔜 Automatic distillation at session end — knowledge extraction with zero manual steps
+- 🔜 `get_context`: a ready-made project briefing (state + decisions + open TODOs + conflicts) injected when a session starts
+- 🔜 Entity graph (services ↔ databases ↔ projects) complementing search
+- 🔜 Local reranker — ships only if the benchmark says it earns its latency
+
+## 🤝 Contributing
+
+Contributions are welcome — and the bar is refreshingly objective: **retrieval changes must beat the eval baseline** ([`docs/EVAL-BASELINE.md`](docs/EVAL-BASELINE.md)), everything else needs tests (`npm test`, no model download required).
+
+Great places to start:
+
+- 🧪 Grow the eval: more case kinds, more languages
+- 🔌 Adapters: transcript formats for more agents (Cursor, Windsurf, VS Code agent mode)
+- 🧹 The [roadmap](docs/ROADMAP.md) 🔜 items above
+
+```bash
+git clone https://github.com/dasportillo/brain-rag.git && cd brain-rag
+npm install && npm test
+```
+
+---
+
+<div align="center">
+
+**Your AI already helped you solve it once.<br/>Brain-RAG makes sure you never pay for the same discovery twice.**
+
+⭐ If that resonates, a star helps other developers find it.
+
+MIT © [dasportillo](https://github.com/dasportillo)
+
+</div>
