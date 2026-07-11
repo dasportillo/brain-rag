@@ -20,6 +20,20 @@ export function projectFromPath(filePath) {
   return m[1].replace(/^-Users-[^-]+-project-/, '').replace(/^-+/, '') || m[1];
 }
 
+// The .git walk itself: nearest ancestor containing .git, as an ABSOLUTE path, or null when the
+// cwd isn't inside a repo. Shared by gitRootName (project naming) and always.mjs (the standing
+// opt-in stores repo ROOTS, so any subdir of a listed repo matches).
+export function gitRoot(cwd) {
+  if (!cwd) return null;
+  let dir = cwd;
+  for (;;) {
+    if (existsSync(join(dir, '.git'))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return null; // reached the filesystem root: not inside a repo
+    dir = parent;
+  }
+}
+
 // PRIMARY project name: name a project by its GIT REPO, not the folder path — so the same repo is ONE
 // project no matter which subdirectory Claude was launched in (…/repo and …/repo/src/x both → "repo").
 // Walk up from the session's real cwd to the nearest .git; the project is that repo folder's name.
@@ -28,13 +42,7 @@ export function projectFromPath(filePath) {
 // this still returns the repo name even if the folder was since deleted (only the .git probe needs disk).
 export function gitRootName(cwd) {
   if (!cwd) return null;
-  let dir = cwd;
-  for (;;) {
-    if (existsSync(join(dir, '.git'))) return basename(dir);
-    const parent = dirname(dir);
-    if (parent === dir) return basename(cwd); // reached the filesystem root: not inside a repo
-    dir = parent;
-  }
+  return basename(gitRoot(cwd) ?? cwd);
 }
 
 // Noise we do NOT want in the index (command wrappers, local stdout, harness reminders).
