@@ -8,7 +8,7 @@ import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } fr
 import { join, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { openDb, searchChunks, listProjects, canonicalProject, recentActivity, wrapEvidence, BRAIN_DIR,
-  saveMemory, searchMemories, MEMORY_TYPES, MEMORY_STATUSES } from './store.mjs';
+  saveMemory, searchMemories, entityLookup, MEMORY_TYPES, MEMORY_STATUSES } from './store.mjs';
 import { buildContext } from './context.mjs';
 import { gitRootName, findCurrentTranscript } from './transcripts.mjs';
 import { embedOne, embed } from './embed.mjs';
@@ -50,6 +50,7 @@ const server = new McpServer(
       'save_memories(memories[]) = write distilled, self-contained knowledge (typed: decision/bug/solution/…) with provenance; same title refreshes, supersedes:<id> retires outdated knowledge.',
       'keep_session() = save THIS conversation to the brain (call proactively when it is worth remembering).',
       'search_context(query, project?, since?, role?) = searches the WHOLE history (hybrid: semantic + exact-term). Put exact identifiers in the query verbatim — they match lexically. role:"summary" finds dense session recaps; role:"actions" finds what was done (commands/files).',
+      'explore_entity(name) = one exact entity (service/table/ARN/repo/file/STATE_NAME): its projects, recency, co-occurring entities and newest mentions — for "what talks to X?" / "where is X used?".',
       '',
       'NAME GOTCHA: the cwd is "dashified" (new_test -> new-test). If get_state finds nothing,',
       'run list_projects to get the exact name and retry.',
@@ -165,6 +166,33 @@ server.tool(
       }
     });
     return { content: [{ type: 'text', text: lines.join('\n') }] };
+  }
+);
+
+server.tool(
+  'explore_entity',
+  'Explores one ENTITY from the heuristic entity graph — a service hostname, a DB table, an S3 bucket/ARN, a repo, a file path, or a SCREAMING_SNAKE state name. Returns where it lives: projects, mention count, recency, top co-occurring entities, and the most recent mention snippets. USE IT for "what talks to X?", "where is X used?", "what do we know about <service/table/ARN/state>?" — for exact identifiers it is more precise than search_context.',
+  { name: z.string().describe('the entity name, verbatim (e.g. pagos.efy.internal, eventos_ledger, MONTOS_FIJOS, owner/repo, table/mi-tabla)') },
+  async ({ name }) => {
+    const info = entityLookup(db, name);
+    if (!info) {
+      return { content: [{ type: 'text', text: `No entity "${name}" in the graph. Names are stored verbatim as extracted (exact hostname / table / state / owner/repo) — try the precise form, or fall back to search_context for fuzzy matching.` }] };
+    }
+    const lines = [
+      `# ${info.entity.name} [${info.entity.kind}] — ${info.mentionCount} mentions, last ${info.recentTs?.slice(0, 10) ?? '?'}`,
+      '',
+      `Projects: ${info.projects.map(p => `${p.project} (${p.n})`).join(' · ') || '—'}`,
+    ];
+    if (info.coOccurring.length) {
+      lines.push(`Co-occurs with: ${info.coOccurring.map(c => `${c.name} [${c.kind}] ×${c.n}`).join(' · ')}`);
+    }
+    if (info.recentMentions.length) {
+      lines.push('', '## Most recent mentions');
+      for (const m of info.recentMentions) {
+        lines.push(`- ${m.project} · ${m.ts?.slice(0, 10) ?? '?'}: ${clip(m.text.replace(/\s+/g, ' ').trim(), 300)}`);
+      }
+    }
+    return { content: [{ type: 'text', text: wrapEvidence(lines.join('\n'), 'the entity graph') }] };
   }
 );
 

@@ -20,6 +20,8 @@
     "relabel.mjs",
     "transcripts.mjs",
     "search.mjs",
+    "entities.mjs",
+    "entities-cli.mjs",
     "state.mjs",
     "context.mjs",
     "distill.mjs",

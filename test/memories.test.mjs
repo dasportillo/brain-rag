@@ -15,9 +15,9 @@ const { openDb, saveMemory, searchMemories, MEMORY_TYPES } = await import('../st
 const vec = (a, b) => { const v = new Array(8).fill(0); v[0] = a; v[1] = b; return v; };
 const db = openDb();
 
-test('migration v2: memories schema present, user_version = 2, idempotent reopen', () => {
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 2);
-  assert.equal(openDb().prepare('PRAGMA user_version').get().user_version, 2);
+test('migration v2: memories schema present, schema current (v3), idempotent reopen', () => {
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 3);
+  assert.equal(openDb().prepare('PRAGMA user_version').get().user_version, 3);
   assert.equal(MEMORY_TYPES.length, 16);
 });
 

@@ -5,6 +5,7 @@ import './quiet.mjs'; // silence node:sqlite's ExperimentalWarning — must run 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { extractEntities } from './entities.mjs';
 // Loaded dynamically (after quiet.mjs) so the experimental warning is suppressed for every entry point.
 const { DatabaseSync } = await import('node:sqlite');
 
@@ -146,6 +147,34 @@ function migrate(db) {
       PRAGMA user_version = 2;
     `);
   }
+  if (version() < 3) {
+    // v3: ENTITY GRAPH, heuristic-first (docs/ROADMAP.md v1.0). entities = canonical
+    // (name, kind) pairs extracted by regex (entities.mjs); entity_mentions = where each
+    // appeared (a chunk OR a memory). NO triggers by design: mentions are written by the
+    // ingest/saveMemory code paths via linkEntities(), so deleting chunks (forget/re-ingest)
+    // can ORPHAN mention rows. Accepted for now — joins against chunks drop orphans
+    // naturally and only bare counts drift slightly; a later version prunes them.
+    db.exec(`
+      BEGIN;
+      CREATE TABLE IF NOT EXISTS entities (
+        id   INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        UNIQUE(name, kind)
+      );
+      CREATE TABLE IF NOT EXISTS entity_mentions (
+        entity_id INTEGER NOT NULL,
+        chunk_id  INTEGER,
+        memory_id INTEGER,
+        project   TEXT NOT NULL,
+        ts        TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_mentions_entity  ON entity_mentions(entity_id);
+      CREATE INDEX IF NOT EXISTS idx_mentions_project ON entity_mentions(project);
+      COMMIT;
+      PRAGMA user_version = 3;
+    `);
+  }
 }
 
 // Controlled vocabulary — one memories table, types as tags (NOT 16 schemas; see docs/ROADMAP.md).
@@ -210,6 +239,27 @@ function lexicalTopIds(db, terms, members, since, role, limit) {
 
 const FUSE_POOL = 60; // per-leg candidates entering the RRF fusion
 const TEXT_POOL = 60; // fused ids whose text is fetched (dedup happens inside this pool)
+const ENTITY_W = 0.8;  // entity leg weight in RRF — below the vector/lexical legs on purpose
+const ENTITY_CAP = 30; // newest mentions considered (older mentions of a hot entity add nothing)
+
+// ENTITY BOOST leg for searchChunks: if the query itself contains an extractable entity
+// (heuristic, entities.mjs) that EXISTS in the graph, return the chunk-ids of its newest
+// mentions. Zero cost when nothing matches: extraction is a few regexes, and the SQL only
+// runs when the extraction found candidates. Deduped per chunk (a chunk mentioning two
+// query entities must not be double-counted), newest-first so the cap keeps recent context.
+function entityMentionChunkIds(db, queryText, cap = ENTITY_CAP) {
+  const ents = extractEntities(queryText);
+  if (!ents.length) return [];
+  const where = ents.map(() => '(e.name = ? AND e.kind = ?)').join(' OR ');
+  try {
+    return db.prepare(`
+      SELECT m.chunk_id id, MAX(m.ts) ts FROM entity_mentions m
+      JOIN entities e ON e.id = m.entity_id
+      WHERE (${where}) AND m.chunk_id IS NOT NULL
+      GROUP BY m.chunk_id ORDER BY ts DESC LIMIT ?
+    `).all(...ents.flatMap(e => [e.name, e.kind]), cap).map(r => r.id);
+  } catch { return []; } // a missing/odd graph never kills search
+}
 
 // Top-k search. With `queryText` it goes HYBRID (vector + FTS5/BM25 lexical fused via RRF);
 // without it (or mode:'semantic'), pure vector + recency. project optional (alias-aware exact
@@ -226,13 +276,19 @@ export function searchChunks(db, qvec, { project = null, k = 8, since = null, re
   const cand = rows.map(r => ({ r, sim: dot(qvec, r.vec) }));
 
   const terms = (mode === 'hybrid' && queryText) ? tokenize(queryText) : [];
+  // entity boost: an extra rrf list, NOT a new leg — see entityMentionChunkIds. mode:'semantic'
+  // skips it along with the lexical leg (both are exact-signal legs over the same queryText).
+  const entityIds = (mode === 'hybrid' && queryText) ? entityMentionChunkIds(db, queryText) : [];
   let scored; // [{ r, sim, score }] best-first
-  if (terms.length) {
+  if (terms.length || entityIds.length) {
     // RRF: fuses vector + lexical (+ a gentle recency signal), robust with no scale normalization.
     const RRF = 60, REC_W = 0.5, rrf = new Map();
     const fuse = (ids, w = 1) => ids.forEach((id, idx) => rrf.set(id, (rrf.get(id) || 0) + w / (RRF + idx + 1)));
     fuse([...cand].sort((a, b) => b.sim - a.sim).slice(0, FUSE_POOL).map(c => c.r.id));
-    fuse(lexicalTopIds(db, terms, members, since, role, FUSE_POOL));
+    if (terms.length) fuse(lexicalTopIds(db, terms, members, since, role, FUSE_POOL));
+    // mentions of a query entity as a third list; ids outside the filtered candidate set are
+    // dropped below by the byId lookup, so project/since/role filters still hold.
+    if (entityIds.length) fuse(entityIds, ENTITY_W);
     // recency as a third signal (half weight ⇒ worth at most ~half a vector rank; never dominates)
     if (recencyBoost) fuse(cand.filter(c => c.r.ts).sort((a, b) => Date.parse(b.r.ts) - Date.parse(a.r.ts)).slice(0, FUSE_POOL).map(c => c.r.id), REC_W);
     const byId = new Map(cand.map(c => [c.r.id, c]));
@@ -386,6 +442,10 @@ export function saveMemory(db, mem, embedding) {
       embedding = COALESCE(?, embedding), updated_at = ? WHERE id = ?`)
       .run(mem.content, mem.confidence ?? 0.8, jsonOrNull(mem.entities), mem.source_session ?? null,
         jsonOrNull(mem.source_messages), blob, now, twin.id);
+    // refresh = re-extract: clear this memory's mentions first so repeated refreshes never
+    // pile up duplicate mention rows (twin.title is the stored title — the UPDATE keeps it).
+    db.prepare('DELETE FROM entity_mentions WHERE memory_id = ?').run(twin.id);
+    linkEntities(db, { memoryId: twin.id, project, ts: now, text: `${twin.title}\n${mem.content}` });
     return { action: 'updated', id: twin.id };
   }
 
@@ -398,6 +458,7 @@ export function saveMemory(db, mem, embedding) {
       mem.valid_from ?? now, mem.valid_until ?? null, mem.supersedes ?? null,
       mem.source_session ?? null, jsonOrNull(mem.source_messages), jsonOrNull(mem.entities), blob, now, now);
   const id = Number(info.lastInsertRowid);
+  linkEntities(db, { memoryId: id, project, ts: now, text: `${mem.title}\n${mem.content}` });
   if (mem.supersedes) {
     db.prepare("UPDATE memories SET status = 'superseded', valid_until = ?, updated_at = ? WHERE id = ? AND status = 'active'")
       .run(now, now, mem.supersedes);
@@ -445,6 +506,78 @@ export function searchMemories(db, qvec, { project = null, k = 5, queryText = nu
     .map(s => ({ id: s.r.id, type: s.r.type, project: s.r.project, title: s.r.title, content: s.r.content,
       confidence: s.r.confidence, status: s.r.status, supersedes: s.r.supersedes,
       source_session: s.r.source_session, updated_at: s.r.updated_at, score: s.score }));
+}
+
+// ---------------------------------------------------------------------------
+// Entity graph (v1.0) — heuristic extraction, written by the ingest/saveMemory paths
+// ---------------------------------------------------------------------------
+
+// Extract entities from `text` and record one mention per entity at (chunkId | memoryId).
+// Upsert is INSERT OR IGNORE on UNIQUE(name, kind) — re-linking the same text is idempotent
+// at the entity level (mentions are the caller's responsibility: ingest links only NEW
+// chunks; saveMemory clears a memory's mentions before relinking). Returns #entities linked.
+export function linkEntities(db, { chunkId = null, memoryId = null, project, ts = null, text }) {
+  const ents = extractEntities(text);
+  if (!ents.length) return 0;
+  const insE = db.prepare('INSERT OR IGNORE INTO entities(name, kind) VALUES(?, ?)');
+  const selE = db.prepare('SELECT id FROM entities WHERE name = ? AND kind = ?');
+  const insM = db.prepare('INSERT INTO entity_mentions(entity_id, chunk_id, memory_id, project, ts) VALUES(?,?,?,?,?)');
+  for (const e of ents) {
+    insE.run(e.name, e.kind);
+    insM.run(selE.get(e.name, e.kind).id, chunkId, memoryId, project, ts);
+  }
+  return ents.length;
+}
+
+// Top entities by mention count (optionally scoped to one project, alias-aware) —
+// the CLI overview and the cheapest "what does this corpus talk about" signal.
+export function entityStats(db, { project = null, limit = 30 } = {}) {
+  let sql = `SELECT e.name, e.kind, COUNT(*) mentions, COUNT(DISTINCT m.project) projects, MAX(m.ts) last_ts
+    FROM entity_mentions m JOIN entities e ON e.id = m.entity_id`;
+  const params = [];
+  if (project) {
+    const members = aliasMembers(project);
+    sql += ` WHERE m.project IN (${members.map(() => '?').join(',')})`;
+    params.push(...members);
+  }
+  sql += ' GROUP BY m.entity_id ORDER BY mentions DESC, last_ts DESC LIMIT ?';
+  params.push(limit);
+  return db.prepare(sql).all(...params);
+}
+
+// One entity's neighborhood: where it lives (projects), how much/recently it's mentioned,
+// which entities share chunks with it, and its newest chunk-backed mentions (with text, so
+// the server tool can show snippets without issuing SQL). Exact name match first, then
+// case-insensitive (identifiers are typed lowercase in queries); when several kinds share a
+// name, the most-mentioned one wins. Returns null when the entity isn't in the graph.
+export function entityLookup(db, name) {
+  const norm = String(name).replace(/\s+/g, ' ').trim();
+  const pick = (sql) => db.prepare(`
+    SELECT e.id, e.name, e.kind, COUNT(m.entity_id) n FROM entities e
+    LEFT JOIN entity_mentions m ON m.entity_id = e.id
+    WHERE ${sql} GROUP BY e.id ORDER BY n DESC LIMIT 1`).get(norm);
+  const ent = pick('e.name = ?') || pick('e.name = ? COLLATE NOCASE');
+  if (!ent) return null;
+  const projects = db.prepare(
+    'SELECT project, COUNT(*) n, MAX(ts) last_ts FROM entity_mentions WHERE entity_id = ? GROUP BY project ORDER BY n DESC'
+  ).all(ent.id);
+  const agg = db.prepare('SELECT COUNT(*) n, MAX(ts) t FROM entity_mentions WHERE entity_id = ?').get(ent.id);
+  // co-occurrence = sharing a chunk (memories are single-author notes; chunks are where things meet)
+  const coOccurring = db.prepare(`
+    SELECT e.name, e.kind, COUNT(DISTINCT m1.chunk_id) n FROM entity_mentions m1
+    JOIN entity_mentions m2 ON m2.chunk_id = m1.chunk_id AND m2.entity_id != m1.entity_id
+    JOIN entities e ON e.id = m1.entity_id
+    WHERE m2.entity_id = ? AND m1.chunk_id IS NOT NULL
+    GROUP BY m1.entity_id ORDER BY n DESC LIMIT 8`).all(ent.id);
+  // join against chunks drops orphaned mentions (see the migration-v3 comment)
+  const recentMentions = db.prepare(`
+    SELECT c.id chunk_id, c.project, c.ts, c.text FROM entity_mentions m
+    JOIN chunks c ON c.id = m.chunk_id
+    WHERE m.entity_id = ? ORDER BY m.ts DESC LIMIT 3`).all(ent.id);
+  return {
+    entity: { id: ent.id, name: ent.name, kind: ent.kind },
+    projects, mentionCount: agg.n, recentTs: agg.t, coOccurring, recentMentions,
+  };
 }
 
 // Prompt-injection guard: what the server returns is EVIDENCE about the past, never
