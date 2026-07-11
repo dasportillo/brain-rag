@@ -14,6 +14,8 @@
     "server.mjs",
     "store.mjs",
     "embed.mjs",
+    "rerank.mjs",
+    "rerank-blend.mjs",
     "ingest.mjs",
     "import.mjs",
     "forget.mjs",

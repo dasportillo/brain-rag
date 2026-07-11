@@ -239,6 +239,7 @@ function lexicalTopIds(db, terms, members, since, role, limit) {
 
 const FUSE_POOL = 60; // per-leg candidates entering the RRF fusion
 const TEXT_POOL = 60; // fused ids whose text is fetched (dedup happens inside this pool)
+const RERANK_POOL = 30; // distinct-text candidates handed to the optional cross-encoder pass
 const ENTITY_W = 0.8;  // entity leg weight in RRF — below the vector/lexical legs on purpose
 const ENTITY_CAP = 30; // newest mentions considered (older mentions of a hot entity add nothing)
 
@@ -265,7 +266,13 @@ function entityMentionChunkIds(db, queryText, cap = ENTITY_CAP) {
 // without it (or mode:'semantic'), pure vector + recency. project optional (alias-aware exact
 // filter), since optional (min ISO date). recencyBoost mixes recency in so recent items weigh
 // a bit more.
-export function searchChunks(db, qvec, { project = null, k = 8, since = null, recencyBoost = 0.05, queryText = null, mode = 'hybrid', role = null } = {}) {
+//
+// rerank (default false): second-pass local cross-encoder over the top candidates — slower but
+// sharper, built for the measured weak slices (cross-lingual EN→ES queries, near-tie pools).
+// Requires queryText. NOTE the return type: rerank:false returns the array synchronously
+// (unchanged contract); rerank:true returns a PROMISE of the same shape (await it) — the model
+// and rerank.mjs itself are loaded lazily on first use, never on the default path.
+export function searchChunks(db, qvec, { project = null, k = 8, since = null, recencyBoost = 0.05, queryText = null, mode = 'hybrid', role = null, rerank = false } = {}) {
   const members = project ? aliasMembers(project) : null;
   const memberSet = members ? new Set(members) : null;
   const rows = candidateRows(db).filter(r =>
@@ -306,54 +313,89 @@ export function searchChunks(db, qvec, { project = null, k = 8, since = null, re
   const textById = new Map(pool.length
     ? db.prepare(`SELECT id, text FROM chunks WHERE id IN (${pool.map(() => '?').join(',')})`).all(...pool.map(s => s.r.id)).map(r => [r.id, r.text])
     : []);
-  const seen = new Set(), out = [];
-  for (const s of pool) {
-    const text = textById.get(s.r.id);
-    if (text == null) continue;
-    const key = text.replace(/\s+/g, ' ').trim().slice(0, 300);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({ project: s.r.project, session: s.r.session, ts: s.r.ts, role: s.r.role, text, score: s.score, sim: s.sim, _vec: s.r.vec });
-    if (out.length >= k) break;
-  }
-  // TEMPORAL VERSION SIGNAL: within the returned set, flag results that are near-duplicate in TOPIC
-  // (mutual cosine ≥ VSIM) but from DIFFERENT dates — i.e. the same thing at different points in time,
-  // which is exactly the "old plan vs final plan" ambiguity. We never drop a result (recall is
-  // preserved); we only annotate, so the reader knows a newer version exists instead of inferring it.
-  const VSIM = 0.92, day = (ts) => (ts ? ts.slice(0, 10) : null);
-  for (let a = 0; a < out.length; a++) {
-    for (let b = a + 1; b < out.length; b++) {
-      const A = out[a], B = out[b];
-      if (!A._vec || !B._vec || !A.ts || !B.ts || day(A.ts) === day(B.ts)) continue;
-      if (dot(A._vec, B._vec) < VSIM) continue;
-      const [older, newer] = Date.parse(A.ts) <= Date.parse(B.ts) ? [A, B] : [B, A];
-      if (!older.outdatedBy || day(newer.ts) > older.outdatedBy) older.outdatedBy = day(newer.ts);
-      const od = day(older.ts);
-      newer.supersedes ||= [];
-      if (!newer.supersedes.includes(od)) newer.supersedes.push(od); // dedup: two older chunks can share a date
+  // dedup/top-k + annotations over an ordered pool — shared verbatim by the default (hybrid
+  // order) and rerank (cross-encoder order) paths, so rerank changes ONLY the ordering upstream.
+  const finish = (orderedPool) => {
+    const seen = new Set(), out = [];
+    for (const s of orderedPool) {
+      const text = textById.get(s.r.id);
+      if (text == null) continue;
+      const key = text.replace(/\s+/g, ' ').trim().slice(0, 300);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ project: s.r.project, session: s.r.session, ts: s.r.ts, role: s.r.role, text, score: s.score, sim: s.sim, _vec: s.r.vec });
+      if (out.length >= k) break;
     }
-  }
-  // CROSS-PROJECT FACET: when the hits span several projects, announce it up front — the same
-  // term can match DIFFERENT topics per project (e.g. a financial event audit-log vs
-  // medical-claims "auditoría") and an inline blend goes unnoticed. Counts only, no "distant
-  // topic" detection: measured on the live corpus, centroid AND query-residual similarities
-  // between false-friend project pairs (0.78–0.83) overlap same-product pairs (0.68–0.84), so
-  // no threshold separates them with these embeddings. Signal only — ranking/recall untouched.
-  if (out.length > 1) {
-    const counts = new Map();
-    for (const s of out) counts.set(s.project, (counts.get(s.project) || 0) + 1);
-    if (counts.size > 1) {
-      out.facet = [...counts].map(([project, n]) => ({ project, n })).sort((a, b) => b.n - a.n);
+    // TEMPORAL VERSION SIGNAL: within the returned set, flag results that are near-duplicate in TOPIC
+    // (mutual cosine ≥ VSIM) but from DIFFERENT dates — i.e. the same thing at different points in time,
+    // which is exactly the "old plan vs final plan" ambiguity. We never drop a result (recall is
+    // preserved); we only annotate, so the reader knows a newer version exists instead of inferring it.
+    const VSIM = 0.92, day = (ts) => (ts ? ts.slice(0, 10) : null);
+    for (let a = 0; a < out.length; a++) {
+      for (let b = a + 1; b < out.length; b++) {
+        const A = out[a], B = out[b];
+        if (!A._vec || !B._vec || !A.ts || !B.ts || day(A.ts) === day(B.ts)) continue;
+        if (dot(A._vec, B._vec) < VSIM) continue;
+        const [older, newer] = Date.parse(A.ts) <= Date.parse(B.ts) ? [A, B] : [B, A];
+        if (!older.outdatedBy || day(newer.ts) > older.outdatedBy) older.outdatedBy = day(newer.ts);
+        const od = day(older.ts);
+        newer.supersedes ||= [];
+        if (!newer.supersedes.includes(od)) newer.supersedes.push(od); // dedup: two older chunks can share a date
+      }
     }
+    // CROSS-PROJECT FACET: when the hits span several projects, announce it up front — the same
+    // term can match DIFFERENT topics per project (e.g. a financial event audit-log vs
+    // medical-claims "auditoría") and an inline blend goes unnoticed. Counts only, no "distant
+    // topic" detection: measured on the live corpus, centroid AND query-residual similarities
+    // between false-friend project pairs (0.78–0.83) overlap same-product pairs (0.68–0.84), so
+    // no threshold separates them with these embeddings. Signal only — ranking/recall untouched.
+    if (out.length > 1) {
+      const counts = new Map();
+      for (const s of out) counts.set(s.project, (counts.get(s.project) || 0) + 1);
+      if (counts.size > 1) {
+        out.facet = [...counts].map(([project, n]) => ({ project, n })).sort((a, b) => b.n - a.n);
+      }
+    }
+    // attach the session title (ai-title) to each hit — cheap, only for the k results.
+    const titleQ = db.prepare('SELECT title FROM sessions WHERE session = ? AND title IS NOT NULL LIMIT 1');
+    for (const s of out) {
+      const row = s.session ? titleQ.get(s.session) : null;
+      if (row?.title) s.title = row.title;
+      delete s._vec; // internal only — don't leak the embedding array to callers
+    }
+    return out;
+  };
+
+  if (rerank && queryText) {
+    // RERANK PATH (async tail — the sync default path below is untouched). The cross-encoder
+    // rescores the top distinct-text candidates against the query; the regular dedup/top-k/
+    // annotation pipeline then runs on the reranked order. rerank.mjs is imported dynamically
+    // HERE so neither it nor the model ever loads unless a caller explicitly asked for it.
+    return (async () => {
+      // head = first RERANK_POOL candidates with DISTINCT text (same dedup key as finish):
+      // duplicated texts would burn cross-encoder slots on identical pairs.
+      const seenKey = new Set(), head = [];
+      for (const s of pool) {
+        const text = textById.get(s.r.id);
+        if (text == null) continue;
+        const key = text.replace(/\s+/g, ' ').trim().slice(0, 300);
+        if (seenKey.has(key)) continue;
+        seenKey.add(key);
+        head.push(s);
+        if (head.length >= RERANK_POOL) break;
+      }
+      if (head.length < 2) return finish(pool); // nothing to reorder
+      const { rerankResults } = await import('./rerank.mjs');
+      const reranked = await rerankResults(queryText, head.map(s => ({ id: s.r.id, text: textById.get(s.r.id) })));
+      const byId = new Map(head.map(s => [s.r.id, s]));
+      // reranked head first (blended score becomes the display score), then everything the
+      // cross-encoder didn't see, in its original hybrid order — finish() dedups across both.
+      const orderedHead = reranked.map(x => ({ ...byId.get(x.id), score: x.score }));
+      const headIds = new Set(head.map(s => s.r.id));
+      return finish([...orderedHead, ...pool.filter(s => !headIds.has(s.r.id))]);
+    })();
   }
-  // attach the session title (ai-title) to each hit — cheap, only for the k results.
-  const titleQ = db.prepare('SELECT title FROM sessions WHERE session = ? AND title IS NOT NULL LIMIT 1');
-  for (const s of out) {
-    const row = s.session ? titleQ.get(s.session) : null;
-    if (row?.title) s.title = row.title;
-    delete s._vec; // internal only — don't leak the embedding array to callers
-  }
-  return out;
+  return finish(pool);
 }
 
 // Diff a file's existing chunk rows against freshly-computed records (matched by text), so ingest
