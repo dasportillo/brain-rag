@@ -16,6 +16,7 @@ import { firstHitRank, recallAtK, mrr, ndcgAtK, percentile, sliceBy } from './ev
 
 const args = process.argv.slice(2);
 const JSON_OUT = args.includes('--json');
+const MODE = args.includes('--semantic') ? 'semantic' : 'hybrid'; // --semantic = vector-only A/B leg
 const K = Number(args.find(a => /^\d+$/.test(a)) || 8);
 const KS = [...new Set([1, 5, K])].sort((a, b) => a - b);
 
@@ -34,7 +35,7 @@ if (!JSON_OUT) console.log(`\nRecall eval — K=${K}, ${cases.length} known-item
 
 cases.forEach((c, i) => {
   const t0 = Date.now();
-  const res = searchChunks(db, qvecs[i], { k: K, project: c.project ?? null, queryText: c.query });
+  const res = searchChunks(db, qvecs[i], { k: K, project: c.project ?? null, queryText: c.query, mode: MODE });
   latencies.push(Date.now() - t0);
   // context size = what the server would actually inject for this query (post-clip)
   ctxBytes.push(res.reduce((s, r) => s + Math.min(r.text.length, r.role === 'summary' ? 2000 : 1200), 0));
