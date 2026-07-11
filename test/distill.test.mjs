@@ -13,7 +13,7 @@ const dir = mkdtempSync(join(tmpdir(), 'brain-distill-'));
 process.env.BRAIN_DIR = dir;
 process.env.BRAIN_DB = join(dir, 'brain.db');
 
-const { buildDistillInput, parseMemoriesJson, formatOpenTodos } = await import('../distill.mjs');
+const { buildDistillInput, parseMemoriesJson, formatOpenTodos, sessionRefs } = await import('../distill.mjs');
 const { isAlwaysKept } = await import('../always.mjs');
 
 test.after(() => rmSync(dir, { recursive: true, force: true }));
@@ -141,6 +141,27 @@ test('parseMemoriesJson: optional fields validated, junk fields and bad values d
   assert.ok(!('extra_field' in out[0]), 'unknown keys never reach saveMemory');
   assert.ok(!('confidence' in out[1]), 'out-of-range confidence dropped, memory kept');
   assert.ok(!('supersedes' in out[1]), 'non-numeric supersedes dropped, memory kept');
+});
+
+// ---------------------------------------------------------------------------
+// sessionRefs — the keys the already-distilled skip matches against source_session
+// ---------------------------------------------------------------------------
+test('sessionRefs: claude transcript (basename == session id) collapses to ONE key', () => {
+  assert.deepEqual(sessionRefs({ path: '/x/abc-123.jsonl', session: 'abc-123' }), ['abc-123']);
+});
+
+test('sessionRefs: codex rollout exposes BOTH the bare uuid and the file basename', () => {
+  // The MCP server records basename(transcript) as source_session; batch distill records the
+  // bare session id. The skip must recognize either, or in-session-distilled Codex sessions
+  // would be re-distilled (re-paying tokens).
+  assert.deepEqual(
+    sessionRefs({ path: '/x/rollout-2026-07-10T12-00-00-uuid-1.jsonl', session: 'uuid-1' }),
+    ['uuid-1', 'rollout-2026-07-10T12-00-00-uuid-1']);
+});
+
+test('sessionRefs: no recorded session id -> just the basename', () => {
+  assert.deepEqual(sessionRefs({ path: '/x/rollout-2026-07-10T12-00-00-uuid-1.jsonl', session: null }),
+    ['rollout-2026-07-10T12-00-00-uuid-1']);
 });
 
 // ---------------------------------------------------------------------------

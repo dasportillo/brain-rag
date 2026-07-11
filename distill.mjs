@@ -123,6 +123,12 @@ const KEEP_FILE = join(BRAIN_DIR, 'keep.list');
 // Provenance key for a session row: the session id when the transcript recorded one, else the
 // file's basename (they coincide for Claude transcripts, which are named <sessionId>.jsonl).
 const sessionRef = (row) => row.session ?? basename(row.path, '.jsonl');
+// ALL keys this session's memories may be filed under (pure; exported for tests). The MCP server
+// records basename(transcript) as source_session — for Codex rollouts that's
+// "rollout-<ts>-<uuid>" while row.session is the bare uuid — so the already-distilled skip must
+// match EITHER key, or a Codex session distilled in-session via /distill wouldn't be recognized
+// and the batch would re-pay its tokens (and re-save near-duplicate memories).
+export const sessionRefs = (row) => [...new Set([row.session, basename(row.path, '.jsonl')])].filter(Boolean);
 
 function hasClaude() {
   try { execFileSync('claude', ['--version'], { stdio: 'ignore' }); return true; }
@@ -213,7 +219,7 @@ export async function main() {
   // re-paying tokens. An explicit --session re-distills on purpose.
   if (!session) {
     const done = new Set(db.prepare('SELECT DISTINCT source_session s FROM memories WHERE source_session IS NOT NULL').all().map(r => r.s));
-    rows = rows.filter(r => !done.has(sessionRef(r)));
+    rows = rows.filter(r => !sessionRefs(r).some(ref => done.has(ref)));
   }
   const batch = rows.slice(0, limit);
   if (!batch.length) { console.log('distill: nothing to do (no matching un-distilled sessions).'); return; }
