@@ -235,13 +235,20 @@ re-introduces the contamination search-time de-dup was added to remove.
 ## Evaluation
 
 Retrieval quality is measured, not eyeballed. `eval.mjs` runs a labeled set of **known-item**
-queries (`eval-cases.json`) — each a natural-language paraphrase of something known to be in the
-corpus — and checks whether the correct content appears in the top-K, reporting **Recall@K** and
-**MRR** (mean reciprocal rank).
+queries (`eval-cases.json`, or your real gitignored `eval-cases.local.json`) — each a
+natural-language paraphrase of something known to be in the corpus — and checks whether the correct
+content appears in the top-K. It reports **Recall@1/5/K**, **MRR**, **nDCG@K**, search **latency**
+p50/p95, and **context size**, sliced by case `kind`/`lang` when cases carry that metadata. Chunks
+containing the literal query are ignored (self-echo guard: an indexed eval session must not grade
+itself).
 
 ```bash
-node eval.mjs 5      # K=5
+node eval.mjs            # K=8
+node eval.mjs 8 --json   # machine-readable — paste into docs/EVAL-BASELINE.md
 ```
+
+The running baseline lives in [`docs/EVAL-BASELINE.md`](docs/EVAL-BASELINE.md) — update it in every
+retrieval-touching PR.
 
 This is the loop that turns "a RAG that runs" into "a RAG that works": measure → diagnose → fix →
 re-measure. A concrete example from this project: the first eval (English `all-MiniLM-L6-v2`) scored

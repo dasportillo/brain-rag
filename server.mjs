@@ -7,7 +7,7 @@ import { z } from 'zod';
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { openDb, searchChunks, listProjects, canonicalProject, recentActivity, BRAIN_DIR } from './store.mjs';
+import { openDb, searchChunks, listProjects, canonicalProject, recentActivity, wrapEvidence, BRAIN_DIR } from './store.mjs';
 import { gitRootName, findCurrentTranscript } from './transcripts.mjs';
 import { embedOne } from './embed.mjs';
 
@@ -78,7 +78,7 @@ server.tool(
         `. The same term can mean different things per project — if some look off-topic, pass project: to scope.\n\n`
       : '';
     const text = hits.length
-      ? facetLine + hits.map(h => `### ${h.project} · ${h.ts?.slice(0, 10) ?? '?'} · ${h.role}${h.title ? ` · "${h.title}"` : ''} (score ${h.score.toFixed(3)})${versionNote(h)}\n${clip(h.text, h.role === 'summary' ? 2000 : 1200)}`).join('\n\n')
+      ? wrapEvidence(facetLine + hits.map(h => `### ${h.project} · ${h.ts?.slice(0, 10) ?? '?'} · ${h.role}${h.title ? ` · "${h.title}"` : ''} (score ${h.score.toFixed(3)})${versionNote(h)}\n${clip(h.text, h.role === 'summary' ? 2000 : 1200)}`).join('\n\n'))
       : 'No results.';
     return { content: [{ type: 'text', text }] };
   }
@@ -102,13 +102,15 @@ server.tool(
   async ({ project }) => {
     const p = canonicalProject(project || currentProject());
     const file = join(BRAIN_DIR, 'state', `${p}.md`);
-    if (existsSync(file)) return { content: [{ type: 'text', text: readFileSync(file, 'utf8') }] };
+    if (existsSync(file)) {
+      return { content: [{ type: 'text', text: wrapEvidence(readFileSync(file, 'utf8'), `the curated state note for "${p}"`) }] };
+    }
     // No curated note: fall back to recent indexed activity so the caller gets raw material
     // instead of a dead end. Clearly marked as NOT curated — it's history, not a state note.
     const recent = recentActivity(db, p, { days: 30, limit: 30 });
     const text = recent.length
-      ? `No curated state for "${p}" — showing recent activity instead (NOT curated; synthesize and save_state to fix that):\n\n` +
-        recent.map(r => `[${r.ts?.slice(0, 10) ?? '?'} ${r.role}] ${clip(r.text.replace(/\s+/g, ' ').trim(), 400)}`).join('\n')
+      ? wrapEvidence(`No curated state for "${p}" — showing recent activity instead (NOT curated; synthesize and save_state to fix that):\n\n` +
+        recent.map(r => `[${r.ts?.slice(0, 10) ?? '?'} ${r.role}] ${clip(r.text.replace(/\s+/g, ' ').trim(), 400)}`).join('\n'))
       : `No curated state for "${p}" and no recent indexed activity. If the name is off, run list_projects for the exact one; use save_state to create the note.`;
     return { content: [{ type: 'text', text }] };
   }
