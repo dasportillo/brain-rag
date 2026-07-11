@@ -19,16 +19,20 @@ if (has('--backfill')) {
   // One-shot backfill for chunks ingested BEFORE the entity graph existed. Idempotent:
   // entities dedupe via INSERT OR IGNORE inside linkEntities, and any chunk that already has
   // a mention row is skipped — so re-runs (or a partial --limit run resumed later) only
-  // process what's left. Chunks with no extractable entities are re-scanned each run; that's
-  // a few regexes per chunk, cheap enough to not warrant a "seen" marker.
+  // process what's left. --limit counts PROCESSED (non-skipped) chunks: skipped chunks are
+  // free, so a resumed limited run advances past everything already linked instead of
+  // re-scanning the same window and stopping. Chunks with no extractable entities are
+  // re-processed each run; that's a few regexes per chunk, cheap enough to not warrant a
+  // "seen" marker.
   const hasMention = db.prepare('SELECT 1 FROM entity_mentions WHERE chunk_id = ? LIMIT 1');
   const rows = db.prepare('SELECT id, project, ts, text FROM chunks ORDER BY id').all();
-  let scanned = 0, skipped = 0, linkedChunks = 0, mentions = 0;
+  let scanned = 0, skipped = 0, processed = 0, linkedChunks = 0, mentions = 0;
   db.exec('BEGIN');
   for (const r of rows) {
-    if (scanned >= LIMIT) break;
+    if (processed >= LIMIT) break;
     scanned++;
     if (hasMention.get(r.id)) { skipped++; continue; }
+    processed++;
     const n = linkEntities(db, { chunkId: r.id, project: r.project, ts: r.ts, text: r.text });
     if (n) { linkedChunks++; mentions += n; }
   }

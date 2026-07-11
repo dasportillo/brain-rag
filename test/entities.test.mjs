@@ -6,6 +6,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const dir = mkdtempSync(join(tmpdir(), 'brain-ent-'));
 process.env.BRAIN_DIR = dir;
@@ -175,6 +177,44 @@ test('entity boost: an orthogonal chunk enters top-k only when its entity is in 
 test("entity boost respects mode: 'semantic' (unchanged pure-cosine order)", () => {
   const res = searchChunks(db, vec(1, 0), { project: 'boost', k: 2, queryText: 'estado MONTOS_FIJOS flujo', mode: 'semantic', recencyBoost: 0 });
   assert.ok(!res.some(h => /jardinería/.test(h.text)), 'semantic mode ignores the entity leg');
+});
+
+// --- backfill CLI: idempotency + --limit resume --------------------------------
+// The CLI runs on import and openDb() binds BRAIN_DB at import time, so both the seeding
+// and the runs go through subprocesses against a FRESH scratch DB (the shared in-process DB
+// contains entity-less chunks that would consume --limit non-deterministically).
+
+test('backfill CLI: --limit N resumes past already-linked chunks; full re-run is a no-op', () => {
+  const dir2 = mkdtempSync(join(tmpdir(), 'brain-ent-bf-'));
+  const root = fileURLToPath(new URL('..', import.meta.url));
+  const env = { ...process.env, BRAIN_DIR: dir2, BRAIN_DB: join(dir2, 'brain.db') };
+  const node = (args, input) => {
+    const r = spawnSync(process.execPath, args, { env, encoding: 'utf8', input });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout;
+  };
+  // seed: two chunks, one clean identifier each, no mention rows yet
+  node(['--input-type=module', '-e', `
+    const { openDb } = await import(${JSON.stringify(join(root, 'store.mjs'))});
+    const db = openDb();
+    const ins = db.prepare('INSERT INTO chunks(path,project,session,ts,role,text,embedding) VALUES(?,?,?,?,?,?,NULL)');
+    ins.run('/bf/a.jsonl', 'bf', 's1', '2026-07-01', 'assistant', 'estado BACKFILL_UNO listo');
+    ins.run('/bf/b.jsonl', 'bf', 's2', '2026-07-02', 'assistant', 'estado BACKFILL_DOS listo');
+  `]);
+  const cli = (...args) => node([join(root, 'cli.mjs'), 'entities', ...args]);
+
+  const run1 = cli('--backfill', '--limit', '1');
+  assert.match(run1, /1 chunks linked/, 'first limited run links the first chunk');
+  const run2 = cli('--backfill', '--limit', '1');
+  assert.match(run2, /1 already linked \(skip\)/, 'resume skips the chunk linked by run 1');
+  assert.match(run2, /1 chunks linked/, 'resume PROGRESSES to the next unlinked chunk (skips are free)');
+  const run3 = cli('--backfill');
+  assert.match(run3, /2 already linked \(skip\), 0 chunks linked, 0 mentions added/, 'full re-run is a no-op');
+  assert.match(run3, /graph now: 2 entities, 2 mentions/, 'no duplicate mentions piled up');
+
+  const lookup = cli('BACKFILL_DOS');
+  assert.match(lookup, /BACKFILL_DOS \[identifier\] — 1 mentions/, 'lookup route sees the backfilled entity');
+  rmSync(dir2, { recursive: true, force: true });
 });
 
 test.after(() => rmSync(dir, { recursive: true, force: true }));
