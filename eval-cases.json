@@ -1,42 +1,62 @@
 [
   {
     "query": "why does confirming a large document upload fail with a 502 between two services",
-    "expectAny": ["25\\s?MB", "10\\s?MB", "docs-service", "\\b502\\b"]
+    "expectAny": ["25\\s?MB", "10\\s?MB", "docs-service", "\\b502\\b"],
+    "kind": "solution",
+    "lang": "en"
   },
   {
     "query": "how did we isolate each tenant's data inside the shared postgres database",
-    "expectAny": ["entity_id", "tenant_isolation", "\\bRLS\\b", "row.level security", "multi.entity"]
+    "expectAny": ["entity_id", "tenant_isolation", "\\bRLS\\b", "row.level security", "multi.entity"],
+    "kind": "decision",
+    "lang": "en"
   },
   {
     "query": "the http api authorizer sends the groups claim as a string and breaks role based access",
-    "expectAny": ["groups-claim", "Array\\.isArray", "stringif", "authorizer"]
+    "expectAny": ["groups-claim", "Array\\.isArray", "stringif", "authorizer"],
+    "kind": "exact-term",
+    "lang": "en"
   },
   {
     "query": "recurring deploy failure on the lambda permission for scheduled eventbridge events",
-    "expectAny": ["EventBridge", "Schedule", "Lambda::Permission", "\\bARN\\b"]
+    "expectAny": ["EventBridge", "Schedule", "Lambda::Permission", "\\bARN\\b"],
+    "kind": "solution",
+    "lang": "en"
   },
   {
     "query": "merging a chain of pull requests ended up merging into the wrong base branch",
-    "expectAny": ["stacked", "gh pr merge", "parent branch", "tip branch"]
+    "expectAny": ["stacked", "gh pr merge", "parent branch", "tip branch"],
+    "kind": "solution",
+    "lang": "en"
   },
   {
     "query": "how to create the very first admin user through a one shot bootstrap endpoint",
-    "expectAny": ["bootstrap-admin", "bootstrap", "first admin"]
+    "expectAny": ["bootstrap-admin", "bootstrap", "first admin"],
+    "kind": "exact-term",
+    "lang": "en"
   },
   {
     "query": "tamper evident audit ledger with a cryptographic hash chain and object lock",
-    "expectAny": ["hash chain", "SHA-256", "Object Lock", "INSTEAD"]
+    "expectAny": ["hash chain", "SHA-256", "Object Lock", "INSTEAD"],
+    "kind": "decision",
+    "lang": "en"
   },
   {
     "query": "attaching the client vpn endpoint to another vpc is not allowed by aws",
-    "expectAny": ["vpn-endpoint", "Client VPN", "peering", "example-net"]
+    "expectAny": ["vpn-endpoint", "Client VPN", "peering", "example-net"],
+    "kind": "entity",
+    "lang": "en"
   },
   {
     "query": "the snake to camel case converter must skip values under certain keys",
-    "expectAny": ["snake", "camel", "passthrough", "metadata"]
+    "expectAny": ["snake", "camel", "passthrough", "metadata"],
+    "kind": "exact-term",
+    "lang": "en"
   },
   {
     "query": "the transactions service is written in php laravel not typescript",
-    "expectAny": ["Laravel", "\\bPHP\\b", "owner_id", "app/"]
+    "expectAny": ["Laravel", "\\bPHP\\b", "owner_id", "app/"],
+    "kind": "entity",
+    "lang": "en"
   }
 ]
