@@ -110,6 +110,33 @@ test('buildContext: budget clips whole lines proportionally, keeps headers and f
 });
 
 // ---------------------------------------------------------------------------
+// buildContext — line shape (one memory = one line, long content excerpted)
+// ---------------------------------------------------------------------------
+test('buildContext: long content is excerpted with … and a multi-line title stays one line', () => {
+  const long = saveMemory(db, {
+    type: 'fact', project: 'linep',
+    title: 'Multi\nline\ttitle',
+    content: 'z'.repeat(400),
+  }, e(0));
+  const { text } = buildContext(db, 'linep');
+  const line = text.split('\n').find(l => l.startsWith(`- #${long.id}`));
+  assert.ok(line, 'the memory renders as a single bullet line');
+  assert.ok(line.includes('Multi line title'), 'title whitespace flattened to single spaces');
+  assert.match(line, /z{10}…/, 'over-cap content is excerpted with an ellipsis');
+  assert.ok(!line.includes('z'.repeat(400)), 'the full 400-char body is not inlined');
+});
+
+test('buildContext: state note only (no memories) -> State section + footer, no memory ids', () => {
+  writeFileSync(join(dir, 'state', 'onlystate.md'), 'Now: just a curated note.\n');
+  const { text, sources } = buildContext(db, 'onlystate');
+  assert.ok(text.includes('## State'), 'state section present');
+  assert.match(text, /Now: just a curated note\./);
+  assert.ok(!text.includes('## Active decisions') && !text.includes('## Open TODOs'), 'no empty memory sections');
+  assert.equal(text.trim().split('\n').at(-1), 'Sources: state/onlystate.md', 'footer cites only the state file');
+  assert.deepEqual(sources.memoryIds, []);
+});
+
+// ---------------------------------------------------------------------------
 // detectConflicts
 // ---------------------------------------------------------------------------
 const vA = norm([1, 0.1, 0, 0, 0, 0, 0, 0]);

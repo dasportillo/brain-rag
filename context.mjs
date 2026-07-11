@@ -31,11 +31,13 @@ const MEM_LINE_CHARS = 300; // per-memory content excerpt (one line each → cli
 const flat = (s) => s.replace(/\s+/g, ' ').trim();
 
 // One memory = ONE line (id + type + date, like server.mjs renders memories) so the budget
-// clipper can drop whole memories, never split one mid-thought.
+// clipper can drop whole memories, never split one mid-thought. Titles are flattened too:
+// a model-written title with a newline would otherwise smuggle a line break into the "line"
+// and break both the bullet rendering and the whole-line clipping guarantee.
 function memLine(m) {
   const c = flat(m.content);
   const body = c.length > MEM_LINE_CHARS ? c.slice(0, MEM_LINE_CHARS).trimEnd() + '…' : c;
-  return `- #${m.id} [${m.type}] ${m.title} · ${m.updated_at?.slice(0, 10) ?? '?'} — ${body}`;
+  return `- #${m.id} [${m.type}] ${flat(m.title)} · ${m.updated_at?.slice(0, 10) ?? '?'} — ${body}`;
 }
 
 // Every ACTIVE memory for the project (all alias members), newest first. `id DESC` breaks the
@@ -62,7 +64,7 @@ export function detectConflicts(db, project) {
     if (!byType.has(r.type)) byType.set(r.type, []);
     byType.get(r.type).push({ ...r, vec: blobToVec(r.embedding) });
   }
-  const lite = (m) => ({ id: m.id, type: m.type, title: m.title, updated_at: m.updated_at });
+  const lite = (m) => ({ id: m.id, type: m.type, title: flat(m.title), updated_at: m.updated_at }); // flat: titles render on one-line bullets
   const out = [];
   for (const [type, mems] of byType) {
     for (let i = 0; i < mems.length; i++) {
@@ -204,7 +206,11 @@ export async function main() {
         }
       }
     } catch { /* never break session start */ }
-    process.exit(0);
+    // NO process.exit(): stdout to a pipe is async on POSIX, so exiting here could truncate the
+    // very context this hook exists to inject. Nothing keeps the loop alive (sqlite/fs are sync),
+    // so returning exits 0 naturally once stdout has flushed.
+    process.exitCode = 0;
+    return;
   }
 
   const project = argv.find(a => !a.startsWith('--')) || gitRootName(process.cwd());
