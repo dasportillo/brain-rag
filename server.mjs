@@ -19,7 +19,7 @@ const db = openDb();
 const clip = (t, n) => (t && t.length > n) ? t.slice(0, n).trimEnd() + ` … [+${t.length - n} chars]` : t;
 
 const server = new McpServer(
-  { name: 'brain', version: '0.8.0' },
+  { name: 'brain', version: '0.8.1' },
   {
     instructions: [
       "This server is the user's \"second brain\": persistent memory of all their work",
