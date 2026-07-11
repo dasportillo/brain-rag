@@ -1,8 +1,9 @@
-// Wire the published package into Claude Code — npx-native: no code is copied anywhere, the MCP
-// server and hooks run straight from the npm package. Only DATA (the index + state notes) lives
-// under BRAIN_DIR (~/.claude/brain). Run with: npx -y <pkg> install  (or `brain-rag install`).
+// Wire the published package into Claude Code (and Codex, when present) — npx-native: no code is
+// copied anywhere, the MCP server and hooks run straight from the npm package. Only DATA (the
+// index + state notes) lives under BRAIN_DIR (~/.claude/brain).
+// Run with: npx -y <pkg> install  (or `brain-rag install`).
 import { execSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -11,6 +12,7 @@ const NAME = pkg.name;                 // e.g. brain-rag
 const NPX = `npx -y ${NAME}`;
 const BRAIN_DIR = process.env.BRAIN_DIR || join(homedir(), '.claude', 'brain');
 const CMD_DIR = join(homedir(), '.claude', 'commands');
+const CODEX_HOME = join(homedir(), '.codex');
 
 console.log(`▸ ${NAME} install (npx-native)\n  data dir: ${BRAIN_DIR}`);
 mkdirSync(BRAIN_DIR, { recursive: true });
@@ -26,6 +28,51 @@ try {
   }
 } catch {
   console.log(`▸ 'claude' CLI not found — register manually:\n    claude mcp add brain --scope user -- ${NPX} serve`);
+}
+
+// 1b. Codex — same brain, second host (only when ~/.codex exists). Codex sessions are also
+// ingested into the index; registering the server + prompts gives Codex the same tools.
+if (existsSync(CODEX_HOME)) {
+  try {
+    const list = execSync('codex mcp list', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    if (/\bbrain\b/.test(list)) {
+      console.log("▸ Codex MCP 'brain' already registered — skipping");
+    } else {
+      execSync(`codex mcp add brain -- ${NPX} serve`, { stdio: 'inherit' });
+      console.log("▸ registered MCP 'brain' in Codex");
+    }
+  } catch {
+    console.log(`▸ 'codex' CLI not found — register manually in ~/.codex/config.toml:\n    [mcp_servers.brain]\n    command = "npx"\n    args = ["-y", "${NAME}", "serve"]`);
+  }
+
+  // Custom prompts = Codex's slash commands. MCP-tool-first (the server runs unsandboxed,
+  // so no shell escalation prompts inside the Codex sandbox).
+  const PROMPTS = join(CODEX_HOME, 'prompts');
+  mkdirSync(PROMPTS, { recursive: true });
+  writeFileSync(join(PROMPTS, 'brain.md'), `Call the \`keep_session\` tool from the \`brain\` MCP server and report its one-line result verbatim. Do nothing else.
+(The brain is OFF by default; this opts THIS session in so it does get indexed, in full.)
+`);
+  writeFileSync(join(PROMPTS, 'state.md'), `Build and persist the curated CURRENT-STATE note for the project \`$ARGUMENTS\` (if empty, infer it from the current working directory), using the \`brain\` MCP server.
+
+1. Call \`get_state\` for that project — it returns the curated note, or recent activity when none exists. If it finds nothing, call \`list_projects\` and retry with the exact name.
+2. Synthesize a concise note: **Now**, **In flight**, **Decisions**, **Blockers**, **Next**. Omit anything reverted or superseded.
+3. Call \`save_state\` with that Markdown (same project if one was given).
+4. Report the saved path on a single line.
+`);
+  console.log(`▸ installed Codex /brain and /state prompts → ${PROMPTS}`);
+
+  console.log(`
+▸ Codex tip — Codex doesn't surface MCP instructions as prominently as Claude Code; add a short
+  section to ~/.codex/AGENTS.md so the model uses the brain proactively, e.g.:
+
+    ## Second brain (MCP 'brain')
+    Persistent memory of all my work across Claude Code and Codex.
+    - "where did I leave off?", "state of X" -> get_state(project); search_context(query) for past decisions.
+    - Call search_context BEFORE assuming there is no prior context on a project/decision.
+    - When a session produced something worth remembering, call keep_session (opt-in; un-kept chats are lost).
+
+  Codex has no session-end hook: sessions marked with /brain are indexed by the next ingest run
+  (the Claude Code SessionEnd hook, or run '${NPX} ingest' manually / on a schedule).`);
 }
 
 // 2. Slash commands — generated so they always point at THIS package (rename-safe).

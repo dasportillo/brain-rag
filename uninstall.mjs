@@ -22,9 +22,19 @@ try {
   console.log("▸ MCP 'brain' not registered (or 'claude' CLI unavailable) — nothing to remove");
 }
 
-// 2. Remove the slash commands we installed.
-for (const f of ['brain.md', 'state.md']) {
-  const p = join(CMD_DIR, f);
+// 1b. Codex: unregister + remove the custom prompts (idempotent).
+try {
+  execSync('codex mcp remove brain', { stdio: ['ignore', 'ignore', 'ignore'] });
+  console.log("▸ removed Codex MCP server 'brain'");
+} catch {
+  console.log("▸ Codex MCP 'brain' not registered (or 'codex' CLI unavailable) — nothing to remove");
+}
+
+// 2. Remove the slash commands / custom prompts we installed.
+for (const p of [
+  join(CMD_DIR, 'brain.md'), join(CMD_DIR, 'state.md'),
+  join(homedir(), '.codex', 'prompts', 'brain.md'), join(homedir(), '.codex', 'prompts', 'state.md'),
+]) {
   if (existsSync(p)) { rmSync(p); console.log(`▸ removed ${p}`); }
 }
 

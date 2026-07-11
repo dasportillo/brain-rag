@@ -5,7 +5,7 @@ const [cmd, ...rest] = process.argv.slice(2);
 process.argv = [process.argv[0], process.argv[1], ...rest];
 
 switch (cmd) {
-  case 'serve':        await import('./server.mjs'); break;              // MCP stdio server (claude mcp add)
+  case 'serve':        await import('./server.mjs'); break;              // MCP stdio server (claude/codex mcp add)
   case 'ingest':       await import('./ingest.mjs'); break;             // index opted-in transcripts
   case 'import':       await import('./import.mjs'); break;             // backfill existing transcripts
   case 'forget':       await import('./forget.mjs'); break;             // remove sessions from the index
@@ -15,16 +15,16 @@ switch (cmd) {
   case 'state':        await import('./state.mjs'); break;              // dump a project's recent activity
   case 'mark-keep':    await import('./mark-keep.mjs'); break;          // SessionStart opt-in hook
   case 'mark-current': await import('./mark-current-keep.mjs'); break;  // /brain backend
-  case 'install':      await import('./install.mjs'); break;            // wire into Claude Code
+  case 'install':      await import('./install.mjs'); break;            // wire into Claude Code + Codex
   case 'uninstall':    await import('./uninstall.mjs'); break;          // unregister + remove commands
   default:
-    console.log(`brain-rag — local, private RAG second brain over your Claude Code transcripts
+    console.log(`brain-rag — local, private RAG second brain over your Claude Code & Codex transcripts
 
 Usage: brain-rag <command>
 
-  install         Register the MCP server + slash commands, and print the hook wiring
+  install         Register the MCP server (Claude Code + Codex) + slash commands, and print the hook wiring
   uninstall       Reverse of install (add --purge to also delete the index + state)
-  serve           Run the MCP server (stdio) — this is what 'claude mcp add' launches
+  serve           Run the MCP server (stdio) — this is what 'claude mcp add' / 'codex mcp add' launches
   ingest          Ingest opted-in transcripts into the index
   import [filter] Backfill EXISTING conversations into the brain (--dry to preview)
   forget <filter> Remove matching sessions from the index + keep.list (--all, --dry)

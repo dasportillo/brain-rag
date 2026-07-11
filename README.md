@@ -1,9 +1,9 @@
 # brain-rag
 
-A local, private **"second brain"** over your Claude Code conversations. It indexes the chat
-transcripts you **opt in** into a searchable vector store and exposes it back to Claude Code as an
-MCP server, so any future session can recover the exact context of what you were working on — across
-every project.
+A local, private **"second brain"** over your Claude Code **and Codex** conversations. It indexes
+the chat transcripts you **opt in** into a searchable vector store and exposes it back to both
+agents as an MCP server, so any future session can recover the exact context of what you were
+working on — across every project, no matter which agent you were using.
 
 Everything runs **locally**: local embedding model, on-disk SQLite, zero external APIs. Your
 transcripts (which contain secrets) never leave the machine.
@@ -13,15 +13,16 @@ transcripts (which contain secrets) never leave the machine.
 ## Why
 
 Work gets scattered across chats. You lose the thread of what you decided, what's in flight, and why.
-Claude Code already stores every session as a `.jsonl` transcript under `~/.claude/projects/`, so the
-raw material already exists — `brain-rag` turns those hundreds of sessions into recallable memory.
+Claude Code already stores every session as a `.jsonl` transcript under `~/.claude/projects/`, and
+Codex keeps its rollouts under `~/.codex/sessions/` — the raw material already exists. `brain-rag`
+turns those hundreds of sessions into one recallable memory.
 
 ## What it does
 
-- **Ingests** only the transcripts you **opt in** (from `~/.claude/projects/**/*.jsonl`) — the brain is OFF by default.
+- **Ingests** only the transcripts you **opt in** (from `~/.claude/projects/**/*.jsonl` and `~/.codex/sessions/**/*.jsonl`) — the brain is OFF by default. Both formats normalize to the same shape, so one index serves both agents.
 - **Chunks + embeds** the useful turns (user prompts + assistant text) with a local model; context-compaction **summaries** are kept whole (tagged `summary`) and each session's **title** is attached to every hit.
 - **Stores** them in a single on-disk SQLite database with cosine search.
-- **Serves** three tools over MCP so Claude Code can query your history from any project:
+- **Serves** its tools over MCP so Claude Code and Codex can query your history from any project:
   - `search_context({query, project?, k?, since?})` — semantic search over past conversations.
   - `list_projects()` — indexed projects with session/chunk counts and last activity.
   - `get_state({project?})` — curated "current state" note for a project (the precise layer).
@@ -32,6 +33,7 @@ raw material already exists — `brain-rag` turns those hundreds of sessions int
 
 ```
 ~/.claude/projects/**/*.jsonl          (Claude Code transcripts — only the ones you opt in)
+~/.codex/sessions/**/*.jsonl           (Codex rollouts — same opt-in, same index)
         │  ingest.mjs   (opt-in filter via keep.list → parse → redact → chunk → embed → upsert)
         ▼
   brain.db  (node:sqlite, embeddings as BLOB, brute-force cosine search)
@@ -39,8 +41,8 @@ raw material already exists — `brain-rag` turns those hundreds of sessions int
         │  MCP tools
   server.mjs  (MCP server) ── search_context · list_projects · get_state
         ▲
-        │  registered globally (claude mcp add --scope user)
-   Claude Code (in ANY repo) ── queries your second brain
+        │  registered globally (claude mcp add --scope user · codex mcp add)
+   Claude Code / Codex (in ANY repo) ── queries your second brain
 ```
 
 ### Design decisions (and why)
@@ -99,8 +101,29 @@ brain-rag import myproj    # only projects matching "myproj"
 brain-rag import --dry     # preview — writes nothing, embeds nothing
 ```
 
-To uninstall: `npx -y brain-rag uninstall` (unregisters the MCP + removes the slash commands; add
-`--purge` to also delete the index and state notes).
+To uninstall: `npx -y brain-rag uninstall` (unregisters the MCP from both agents + removes the
+slash commands/prompts; add `--purge` to also delete the index and state notes).
+
+### Codex (OpenAI)
+
+`npx -y brain-rag install` detects `~/.codex` and wires Codex too: it registers the MCP server
+(`codex mcp add brain -- npx -y brain-rag serve`) and installs `/brain` + `/state` as custom
+prompts under `~/.codex/prompts/`. Manual registration, if you prefer `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.brain]
+command = "npx"
+args = ["-y", "brain-rag", "serve"]
+```
+
+Two Codex-specific notes:
+
+- **Nudge the model.** Codex doesn't surface MCP instructions as prominently as Claude Code, so add
+  a short section to `~/.codex/AGENTS.md` telling it when to reach for the brain (the installer
+  prints a ready-to-paste snippet).
+- **No session-end hook.** Codex sessions you opt in with `/brain` are picked up by the next ingest
+  run — in practice the Claude Code `SessionEnd` hook keeps both corpora fresh; or run
+  `npx -y brain-rag ingest` manually / on a schedule.
 
 ### From source
 
@@ -260,7 +283,8 @@ text).
 
 The brain is **opt-in**: `ingest.mjs` only considers transcripts listed in `keep.list`. You add a
 session to it by starting with `claude --brain` (the `mark-keep.mjs` `SessionStart` hook) or by
-running `/brain` mid-conversation (`mark-current-keep.mjs`).
+running `/brain` mid-conversation (`mark-current-keep.mjs`) — in Claude Code or in Codex; the
+current session is found across both stores by cwd match + recency.
 
 Among opted-in sessions it is **incremental**: each session is one `.jsonl` file and the `sessions`
 table stores its `(mtime, bytes)`, so on every run only new or grown files are re-indexed:
@@ -301,7 +325,7 @@ the brain stays current with no manual step.
 
 | File | Responsibility |
 |---|---|
-| `transcripts.mjs` | parse `.jsonl`, chunk, redact secrets |
+| `transcripts.mjs` | parse both `.jsonl` formats (Claude Code + Codex rollouts), chunk, redact secrets, find the current session |
 | `embed.mjs` | local embeddings (transformers.js) |
 | `store.mjs` | `node:sqlite` schema, cosine search, stats |
 | `ingest.mjs` | opt-in + incremental ingestion CLI |

@@ -1,13 +1,14 @@
-// GLOBAL MCP server: exposes your second brain to Claude Code in any project.
-// Register with:  claude mcp add brain --scope user -- node ~/.claude/brain/server.mjs
+// GLOBAL MCP server: exposes your second brain to Claude Code and Codex in any project.
+// Register with:  claude mcp add brain --scope user -- npx -y brain-rag serve
+//            or:  codex mcp add brain -- npx -y brain-rag serve
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { openDb, searchChunks, listProjects, canonicalProject, recentActivity, BRAIN_DIR } from './store.mjs';
-import { gitRootName } from './transcripts.mjs';
+import { gitRootName, findCurrentTranscript } from './transcripts.mjs';
 import { embedOne } from './embed.mjs';
 
 const db = openDb();
@@ -17,11 +18,11 @@ const db = openDb();
 const clip = (t, n) => (t && t.length > n) ? t.slice(0, n).trimEnd() + ` … [+${t.length - n} chars]` : t;
 
 const server = new McpServer(
-  { name: 'brain', version: '0.4.0' },
+  { name: 'brain', version: '0.5.0' },
   {
     instructions: [
       "This server is the user's \"second brain\": persistent memory of all their work",
-      '(indexed history of Claude Code conversations + curated per-project state).',
+      '(indexed history of Claude Code & Codex conversations + curated per-project state).',
       '',
       'WHEN TO USE IT (proactively, even if not asked with these exact words):',
       '- When the user asks about the STATE of something: "where did I leave off?", "give me the state of X",',
@@ -135,16 +136,10 @@ server.tool(
   'Marks THIS conversation to be saved into the brain (indexed when the session ends). The brain is OPT-IN — nothing is saved unless kept, so an un-kept chat is lost. USE IT PROACTIVELY, without being asked, when this conversation produced something worth remembering later: a decision, a solution/fix, a design, or non-obvious context about a project. Do NOT call it for trivial, throwaway, or purely exploratory chats. Idempotent.',
   {},
   async () => {
-    const PROJECTS = join(homedir(), '.claude', 'projects');
-    const dashed = process.cwd().replace(/[/_]/g, '-');
-    const projDir = join(PROJECTS, dashed);
-    const root = existsSync(projDir) ? projDir : PROJECTS;
-    const walk = (d) => !existsSync(d) ? [] : readdirSync(d, { withFileTypes: true }).flatMap(e =>
-      e.isDirectory() ? walk(join(d, e.name)) : (e.name.endsWith('.jsonl') ? [join(d, e.name)] : []));
-    const files = walk(root);
-    if (!files.length) return { content: [{ type: 'text', text: 'No transcript found for the current session.' }] };
-    let newest = files[0], mtime = -1;
-    for (const f of files) { const m = statSync(f).mtimeMs; if (m > mtime) { mtime = m; newest = f; } }
+    // Works from BOTH hosts: the current session is the transcript being written right
+    // now, whether it lives under ~/.claude/projects or ~/.codex/sessions.
+    const newest = findCurrentTranscript(process.cwd());
+    if (!newest) return { content: [{ type: 'text', text: 'No transcript found for the current session.' }] };
     const keep = join(homedir(), '.claude', 'brain', 'keep.list');
     const kept = existsSync(keep) ? readFileSync(keep, 'utf8').split('\n').map(s => s.trim()) : [];
     if (kept.includes(newest)) return { content: [{ type: 'text', text: 'This session is already marked to be saved.' }] };
