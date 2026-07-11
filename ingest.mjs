@@ -15,7 +15,7 @@
 import { statSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { openDb, vecToBlob, stats, diffChunks } from './store.mjs';
+import { openDb, vecToBlob, stats, diffChunks, linkEntities } from './store.mjs';
 import { parseSession, projectFromPath, gitRootName, chunkText, redact, walkJsonl, ADAPTERS } from './transcripts.mjs';
 
 // OPT-IN: by default NOTHING is indexed. Only sessions whose transcript is listed in
@@ -105,7 +105,10 @@ for (const file of files) {
   else for (const id of staleIds) delChunkById.run(id);
   toEmbed.forEach((r, i) => {
     const blob = embeddings[i] ? vecToBlob(embeddings[i]) : null;
-    insChunk.run(file, project, r.session ?? null, r.ts ?? null, r.role, r.text, blob);
+    const info = insChunk.run(file, project, r.session ?? null, r.ts ?? null, r.role, r.text, blob);
+    // entity graph: link only NEW chunks (regex-cheap vs the embedding we just paid for).
+    // Stale chunks deleted above may orphan old mentions — accepted, see store.mjs migration v3.
+    linkEntities(db, { chunkId: Number(info.lastInsertRowid), project, ts: r.ts ?? null, text: r.text });
   });
   upsertSession.run(file, project, records[0]?.session ?? null, mtime, st.size, records.length, new Date().toISOString(), title ?? null);
   db.exec('COMMIT');
