@@ -5,11 +5,12 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import { homedir } from 'node:os';
-import { openDb, searchChunks, listProjects, canonicalProject, recentActivity, wrapEvidence, BRAIN_DIR } from './store.mjs';
+import { openDb, searchChunks, listProjects, canonicalProject, recentActivity, wrapEvidence, BRAIN_DIR,
+  saveMemory, searchMemories, MEMORY_TYPES, MEMORY_STATUSES } from './store.mjs';
 import { gitRootName, findCurrentTranscript } from './transcripts.mjs';
-import { embedOne } from './embed.mjs';
+import { embedOne, embed } from './embed.mjs';
 
 const db = openDb();
 
@@ -18,7 +19,7 @@ const db = openDb();
 const clip = (t, n) => (t && t.length > n) ? t.slice(0, n).trimEnd() + ` … [+${t.length - n} chars]` : t;
 
 const server = new McpServer(
-  { name: 'brain', version: '0.7.0' },
+  { name: 'brain', version: '0.8.0' },
   {
     instructions: [
       "This server is the user's \"second brain\": persistent memory of all their work",
@@ -35,11 +36,13 @@ const server = new McpServer(
       '- When wrapping up work, or asked to save/update the state: synthesize a concise note',
       '  (Now / In flight / Decisions / Blockers / Next) and call save_state(content, project).',
       '- When THIS conversation produced something worth remembering (a decision, a fix, a design,',
-      '  non-obvious project context): call keep_session so it gets saved. The brain is OPT-IN, so an',
-      '  un-kept chat is lost. Do NOT keep trivial / throwaway / purely exploratory chats.',
+      '  non-obvious project context): call keep_session so it gets saved, AND distill the durable',
+      '  pieces into save_memories (a decision with its why, a bug root cause, a solution). The brain',
+      '  is OPT-IN, so an un-kept chat is lost. Do NOT keep trivial / throwaway / exploratory chats.',
       '',
       'TOOLS: get_state(project?) = curated "where I am today"; if no note exists it returns recent activity (NOT curated) — synthesize + save_state to persist.',
       'save_state(content, project?) = write/refresh that curated note (overwrites; drop reverted decisions).',
+      'save_memories(memories[]) = write distilled, self-contained knowledge (typed: decision/bug/solution/…) with provenance; same title refreshes, supersedes:<id> retires outdated knowledge.',
       'keep_session() = save THIS conversation to the brain (call proactively when it is worth remembering).',
       'search_context(query, project?, since?, role?) = searches the WHOLE history (hybrid: semantic + exact-term). Put exact identifiers in the query verbatim — they match lexically. role:"summary" finds dense session recaps; role:"actions" finds what was done (commands/files).',
       '',
@@ -54,6 +57,13 @@ function currentProject() {
   return gitRootName(process.cwd());
 }
 
+// Best-effort session id for memory provenance: the transcript being written right now is
+// named after the session (Claude: <sessionId>.jsonl · Codex: rollout-…-<id>.jsonl).
+function currentSessionRef() {
+  const t = findCurrentTranscript(process.cwd());
+  return t ? basename(t, '.jsonl') : null;
+}
+
 server.tool(
   'search_context',
   'Searches the history of work conversations (all projects). Returns the most relevant chunks with project/date. USE IT when the user asks "what did we decide about X?", "how did I solve Y?", "what did we do with Z?", "search the brain for…", or before assuming there is no prior context on a topic. Recovers past decisions and work.',
@@ -63,9 +73,21 @@ server.tool(
     k: z.number().optional().describe('number of results (default 8)'),
     since: z.string().optional().describe('minimum ISO date, e.g. 2026-06-01'),
     role: z.enum(['user', 'assistant', 'summary', 'actions']).optional().describe("filter by turn type: 'summary' = compaction recaps (dense session overviews), 'actions' = commands/files touched, 'user'/'assistant' = the conversation itself"),
+    layer: z.enum(['both', 'raw', 'memories']).optional().describe("'both' (default) = distilled memories first, then raw history; 'memories' = only the distilled layer; 'raw' = only transcript chunks"),
   },
-  async ({ query, project, k = 8, since, role }) => {
+  async ({ query, project, k = 8, since, role, layer = 'both' }) => {
     const qvec = await embedOne(query);
+    // Layer 2 first: distilled memories are curated knowledge — shown above raw hits.
+    const mems = layer !== 'raw'
+      ? searchMemories(db, qvec, { project: project ?? null, k: layer === 'memories' ? k : Math.min(4, k), queryText: query })
+      : [];
+    const memBlock = mems.length
+      ? '## Distilled memories (curated Layer 2 — prefer these; they carry status & provenance)\n\n' +
+        mems.map(m => `★ #${m.id} [${m.type}] ${m.title} · ${m.project} · conf ${m.confidence} · ${m.updated_at?.slice(0, 10)}${m.supersedes ? ` · supersedes #${m.supersedes}` : ''}\n${clip(m.content, 800)}`).join('\n\n')
+      : '';
+    if (layer === 'memories') {
+      return { content: [{ type: 'text', text: mems.length ? wrapEvidence(memBlock, 'the distilled memory store') : 'No memories match.' }] };
+    }
     const hits = searchChunks(db, qvec, { project: project ?? null, k, since: since ?? null, queryText: query, role: role ?? null });
     // Temporal-version signal: warn when a hit has a newer near-duplicate, or mark the latest of a set.
     const versionNote = (h) => h.outdatedBy
@@ -78,10 +100,45 @@ server.tool(
         hits.facet.map(f => `${f.project} (${f.n})`).join(' · ') +
         `. The same term can mean different things per project — if some look off-topic, pass project: to scope.\n\n`
       : '';
-    const text = hits.length
-      ? wrapEvidence(facetLine + hits.map(h => `### ${h.project} · ${h.ts?.slice(0, 10) ?? '?'} · ${h.role}${h.title ? ` · "${h.title}"` : ''} (score ${h.score.toFixed(3)})${versionNote(h)}\n${clip(h.text, h.role === 'summary' ? 2000 : 1200)}`).join('\n\n'))
-      : 'No results.';
-    return { content: [{ type: 'text', text }] };
+    const rawBlock = hits.length
+      ? (memBlock ? '## Raw history\n\n' : '') + facetLine +
+        hits.map(h => `### ${h.project} · ${h.ts?.slice(0, 10) ?? '?'} · ${h.role}${h.title ? ` · "${h.title}"` : ''} (score ${h.score.toFixed(3)})${versionNote(h)}\n${clip(h.text, h.role === 'summary' ? 2000 : 1200)}`).join('\n\n')
+      : '';
+    const body = [memBlock, rawBlock].filter(Boolean).join('\n\n');
+    return { content: [{ type: 'text', text: body ? wrapEvidence(body) : 'No results.' }] };
+  }
+);
+
+server.tool(
+  'save_memories',
+  'Saves DISTILLED knowledge into the memory store (Layer 2) — durable facts, not conversation chunks. USE IT PROACTIVELY when this session produces something worth keeping: a decision (+why), a bug root cause, a solution, an architecture fact, a preference, a lesson. Each memory must be SELF-CONTAINED (readable without the conversation). Same title = refresh in place; pass supersedes:<id> to retire an outdated memory (the response warns about similar existing ones).',
+  {
+    memories: z.array(z.object({
+      type: z.enum(MEMORY_TYPES),
+      title: z.string().describe('short, specific, STABLE — saving the same title again refreshes that memory'),
+      content: z.string().describe('self-contained: the fact/decision itself + the why + minimal context'),
+      project: z.string().optional().describe('defaults to the current repo'),
+      confidence: z.number().min(0).max(1).optional().describe('default 0.8'),
+      status: z.enum(MEMORY_STATUSES).optional().describe("default 'active'; use 'experimental' for tentative knowledge"),
+      supersedes: z.number().optional().describe('id of the memory this one replaces — retires it'),
+      entities: z.array(z.string()).optional().describe('projects/services/resources this touches (e.g. ["efy3", "Aurora"])'),
+      source_messages: z.array(z.string()).optional().describe('short verbatim quotes or ids from THIS conversation backing the memory'),
+    })).min(1),
+  },
+  async ({ memories }) => {
+    const vecs = await embed(memories.map(m => `${m.title}\n${m.content}`));
+    const session = currentSessionRef();
+    const lines = memories.map((m, i) => {
+      try {
+        const r = saveMemory(db, { ...m, project: m.project || currentProject(), source_session: session }, vecs[i]);
+        return `✔ #${r.id} ${r.action} · [${m.type}] ${m.title}`
+          + (r.superseded ? ` · retired #${r.superseded}` : '')
+          + (r.similar ? ` · ⚠️ similar to ${r.similar.map(s => `#${s.id} "${s.title}"`).join(', ')} — if one is now outdated, save again with supersedes:<id>` : '');
+      } catch (e) {
+        return `✗ [${m.type}] ${m.title} — ${e.message}`;
+      }
+    });
+    return { content: [{ type: 'text', text: lines.join('\n') }] };
   }
 );
 

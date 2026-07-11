@@ -84,10 +84,11 @@ test("mode: 'semantic' ignores the lexical leg (pure cosine order)", () => {
   assert.equal(res[0].session, 's5');
 });
 
-test('migration v1 is idempotent and triggers keep FTS in sync (insert + delete)', () => {
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 1);
+test('migrations are idempotent and triggers keep FTS in sync (insert + delete)', () => {
+  const CURRENT = 2; // bump when adding a migration
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, CURRENT);
   const again = openDb(); // same file, second connection: migrate() must be a no-op
-  assert.equal(again.prepare('PRAGMA user_version').get().user_version, 1);
+  assert.equal(again.prepare('PRAGMA user_version').get().user_version, CURRENT);
   const count = () => db.prepare(`SELECT count(*) n FROM chunks_fts WHERE chunks_fts MATCH '"auditoria"'`).get().n;
   assert.equal(count(), 1, 'insert trigger indexed the accented text, diacritics-normalized');
   db.exec("DELETE FROM chunks WHERE project = 'lexproj'"); // also cleans up for the facet tests below

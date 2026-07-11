@@ -32,8 +32,9 @@ try {
 
 // 2. Remove the slash commands / custom prompts we installed.
 for (const p of [
-  join(CMD_DIR, 'brain.md'), join(CMD_DIR, 'state.md'),
+  join(CMD_DIR, 'brain.md'), join(CMD_DIR, 'state.md'), join(CMD_DIR, 'distill.md'),
   join(homedir(), '.codex', 'prompts', 'brain.md'), join(homedir(), '.codex', 'prompts', 'state.md'),
+  join(homedir(), '.codex', 'prompts', 'distill.md'),
 ]) {
   if (existsSync(p)) { rmSync(p); console.log(`▸ removed ${p}`); }
 }
