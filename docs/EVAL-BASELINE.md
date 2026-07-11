@@ -8,6 +8,30 @@ Update this table in every retrieval-touching PR (`node eval.mjs 8 --json`).
 | 2026-07-10 | 0.5.0 + v0.6 instrument | 10 | 470 / 18,701 | 0.70 | 0.90 | 0.90 | 0.758 | 0.793 | 258 / 307 ms | 8.5 kB |
 | 2026-07-11 | 0.5.0 + 30 cases, Codex corpus | 30 | 560 / 30,792 | 0.77 | 0.93 | 0.97 | 0.819 | 0.854 | 435 / 527 ms | 8.4 kB |
 | 2026-07-11 | 0.7.0 hybrid: FTS5/BM25 + RRF | 30 | 560 / 30,792 | 0.73 | 0.97 | 0.97 | 0.828 | 0.863 | 91 / 102 ms | 6.9 kB |
+| 2026-07-11 | 0.8.1 + 123-case eval | 123 | 560 / 30,802 | 0.59 | 0.79 | 0.85 | 0.674 | 0.715 | 90 / 105 ms | 6.2 kB |
+
+Notes on the 0.8.1 row (case set 30 → 123):
+
+- **Case set expanded 30 → 123**, mined from actual chunk text (not titles) across **44 of 46
+  projects**, all five kinds (solution 37 / exact-term 33 / decision 25 / state 17 / entity 11),
+  ES 75 / EN 48. Every `expectAny` pattern was verified to match ≥1 in-project chunk before
+  inclusion (dead or out-of-project patterns rejected). **38 cases target content that exists
+  only in imported Codex rollouts** — cross-host recall is now a first-class slice.
+- **Scores dropped vs the 30-case row** (R@8 0.97 → 0.85, MRR 0.828 → 0.674). This is the case
+  set getting harder and more representative — single-session long-tail projects, cross-lingual
+  EN-query→ES-content cases, exact long-tail identifiers — not a retrieval regression: latency
+  is unchanged (p50 90 ms) and the original 30 cases behave as before.
+- **Ablation** (`node eval.mjs 8 --semantic`, vector-only): R@8 0.60, MRR 0.406 — the lexical
+  leg is worth **~25 pp of R@8** here (was ~10 pp at 30 cases) because the new cases lean on
+  exact identifiers where BM25 dominates. Vector-only is NOT a viable fallback on this corpus.
+- Misses concentrate in `state` (13/17) and `entity` (8/11) and in EN queries over ES content
+  (en 38/48 vs es 66/75) — the reranker work should be gated on exactly these slices.
+- The long-standing stacked-PR miss was re-diagnosed: patterns tightened (fixed that case only;
+  "gh pr merge" was false-hit-prone, "tip branch" matched nothing corpus-wide) but it remains a
+  **genuine ranking gap** — the true chunk (Spanish, short) never appears even at K=50 in either
+  mode: a cross-lingual query with zero lexical overlap in a flat-similarity neighborhood crowded
+  by hundreds of generic PR/merge chunks. Rescue needs a cross-lingual reranker or query-side ES
+  expansion — exactly what the v1.0 reranker gate is for; threshold tweaks won't fix it.
 
 Notes on the 0.7.0 row (hybrid retrieval rework):
 
