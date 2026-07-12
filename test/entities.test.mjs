@@ -100,8 +100,8 @@ test('empty / non-string input extracts nothing', () => {
 const db = openDb();
 
 test('migration v3: entity tables present, user_version = 3, idempotent reopen', () => {
-  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 3);
-  assert.equal(openDb().prepare('PRAGMA user_version').get().user_version, 3, 'second openDb is a no-op');
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 4);
+  assert.equal(openDb().prepare('PRAGMA user_version').get().user_version, 4, 'second openDb is a no-op');
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('entities', 'entity_mentions')").all();
   assert.equal(tables.length, 2);
 });

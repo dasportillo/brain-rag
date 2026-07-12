@@ -100,11 +100,31 @@ server.tool(
     k: z.number().optional().describe('number of results (default 8)'),
     since: z.string().optional().describe('minimum ISO date, e.g. 2026-06-01'),
     role: z.enum(['user', 'assistant', 'summary', 'actions']).optional().describe("filter by turn type: 'summary' = compaction recaps (dense session overviews), 'actions' = commands/files touched, 'user'/'assistant' = the conversation itself"),
-    layer: z.enum(['both', 'raw', 'memories']).optional().describe("'both' (default) = distilled memories first, then raw history; 'memories' = only the distilled layer; 'raw' = only transcript chunks"),
+    layer: z.enum(['both', 'raw', 'memories', 'team']).optional().describe("'both' (default) = distilled memories first, then raw history; 'memories' = only the distilled layer; 'raw' = only transcript chunks; 'team' = your TEAM's shared memory store (needs 'brain-rag cloud login')"),
     rerank: z.boolean().optional().describe('slower but sharper: second-pass local cross-encoder reranking of the top candidates. Use for cross-language queries (e.g. an English query over Spanish notes) or as a retry when you KNOW something exists but the normal search cannot find it. Default off; first use loads a local model (one-time cost)'),
   },
   async ({ query, project, k = 8, since, role, layer = 'both', rerank = false }) => {
     const qvec = await embedOne(query);
+    // layer:'team' proxies to the team portal — the query embeds LOCALLY (the cloud sees
+    // the vector + text of the query, never anything else from this machine).
+    if (layer === 'team') {
+      const { loadCloudConfig } = await import('./cloud.mjs');
+      const conf = loadCloudConfig();
+      if (!conf) return { content: [{ type: 'text', text: "Not connected to a team — run 'brain-rag cloud login' first (or drop layer:'team')." }] };
+      const res = await fetch(conf.endpoint.replace(/\/$/, '') + '/v1/memories/search', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${conf.apiKey}` },
+        body: JSON.stringify({ embedding: Array.from(qvec), query, project: project ?? undefined, k }),
+      });
+      if (!res.ok) return { content: [{ type: 'text', text: `Team search failed: ${res.status} ${(await res.text()).slice(0, 200)}` }] };
+      const { hits: teamHits } = await res.json();
+      const text = teamHits.length
+        ? wrapEvidence(teamHits.map(h =>
+            `★ #${h.id} [${h.type}] ${h.title} · ${h.project} · by ${h.author_name || h.author_email} · ${(h.updated_at || '').slice(0, 10)}${h.supersedes ? ` · supersedes #${h.supersedes}` : ''}\n${clip(h.content, 800)}`
+          ).join('\n\n'), "your team's shared memory store")
+        : 'No team memories match.';
+      return { content: [{ type: 'text', text }] };
+    }
     // Layer 2 first: distilled memories are curated knowledge — shown above raw hits.
     const mems = layer !== 'raw'
       ? searchMemories(db, qvec, { project: project ?? null, k: layer === 'memories' ? k : Math.min(4, k), queryText: query })
@@ -152,6 +172,7 @@ server.tool(
       supersedes: z.number().optional().describe('id of the memory this one replaces — retires it'),
       entities: z.array(z.string()).optional().describe('projects/services/resources this touches (e.g. ["efy3", "Aurora"])'),
       source_messages: z.array(z.string()).optional().describe('short verbatim quotes or ids from THIS conversation backing the memory'),
+      private: z.boolean().optional().describe('true = never leaves this machine (excluded from team sync; still searchable locally)'),
     })).min(1),
   },
   async ({ memories }) => {

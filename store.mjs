@@ -175,6 +175,18 @@ function migrate(db) {
       PRAGMA user_version = 3;
     `);
   }
+  if (version() < 4) {
+    // v4: team-sync bookkeeping. private=1 excludes a memory from cloud sync (it stays
+    // fully searchable LOCALLY — private governs sharing, not recall). synced_at tracks
+    // the last successful push so sync is incremental (updated_at > synced_at re-pushes).
+    db.exec(`
+      BEGIN;
+      ALTER TABLE memories ADD COLUMN private INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE memories ADD COLUMN synced_at TEXT;
+      COMMIT;
+      PRAGMA user_version = 4;
+    `);
+  }
 }
 
 // Controlled vocabulary — one memories table, types as tags (NOT 16 schemas; see docs/ROADMAP.md).
@@ -481,9 +493,9 @@ export function saveMemory(db, mem, embedding) {
   if (twin) {
     db.prepare(`UPDATE memories SET content = ?, confidence = ?, entities = COALESCE(?, entities),
       source_session = COALESCE(?, source_session), source_messages = COALESCE(?, source_messages),
-      embedding = COALESCE(?, embedding), updated_at = ? WHERE id = ?`)
+      embedding = COALESCE(?, embedding), private = ?, updated_at = ? WHERE id = ?`)
       .run(mem.content, mem.confidence ?? 0.8, jsonOrNull(mem.entities), mem.source_session ?? null,
-        jsonOrNull(mem.source_messages), blob, now, twin.id);
+        jsonOrNull(mem.source_messages), blob, mem.private ? 1 : 0, now, twin.id);
     // refresh = re-extract: clear this memory's mentions first so repeated refreshes never
     // pile up duplicate mention rows (twin.title is the stored title — the UPDATE keeps it).
     db.prepare('DELETE FROM entity_mentions WHERE memory_id = ?').run(twin.id);
@@ -494,11 +506,12 @@ export function saveMemory(db, mem, embedding) {
   // 2. insert (optionally retiring an explicit predecessor)
   const info = db.prepare(`INSERT INTO memories
     (type, project, title, content, confidence, status, valid_from, valid_until, supersedes,
-     source_session, source_messages, entities, embedding, created_at, updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+     source_session, source_messages, entities, embedding, private, created_at, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(mem.type, project, mem.title, mem.content, mem.confidence ?? 0.8, mem.status ?? 'active',
       mem.valid_from ?? now, mem.valid_until ?? null, mem.supersedes ?? null,
-      mem.source_session ?? null, jsonOrNull(mem.source_messages), jsonOrNull(mem.entities), blob, now, now);
+      mem.source_session ?? null, jsonOrNull(mem.source_messages), jsonOrNull(mem.entities), blob,
+      mem.private ? 1 : 0, now, now);
   const id = Number(info.lastInsertRowid);
   linkEntities(db, { memoryId: id, project, ts: now, text: `${mem.title}\n${mem.content}` });
   if (mem.supersedes) {
