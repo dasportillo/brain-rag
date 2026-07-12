@@ -21,6 +21,7 @@ switch (cmd) {
   // distill/always export main() instead of running on import — tests import their pure helpers.
   case 'distill':      await (await import('./distill.mjs')).main(); break; // batch memory extraction (headless claude -p)
   case 'always':       await (await import('./always.mjs')).main(); break;  // standing per-repo opt-in (always.list)
+  case 'cloud':        await (await import('./cloud.mjs')).main(); break;   // team sync (Brain-RAG Teams): login|sync|status|logout
   case 'install':      await import('./install.mjs'); break;            // wire into Claude Code + Codex
   case 'uninstall':    await import('./uninstall.mjs'); break;          // unregister + remove commands
   default:
@@ -46,6 +47,7 @@ Usage: brain-rag <command>
   distill         Extract durable memories from indexed sessions via headless claude — costs tokens
                   [--project X] [--session <transcript>] [--limit N] [--dry] [--hook]
   always          Standing opt-in: always keep sessions of a repo — add [path] | remove [path] | list
+  cloud           Team sync (Brain-RAG Teams): login | sync [--review] | status | logout — only distilled memories, never transcripts
   mark-keep       SessionStart hook: opt a BRAIN=1 (or always-listed) session in
   mark-current    Opt the CURRENT session in (the /brain command backend)
 `);

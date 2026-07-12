@@ -29,6 +29,7 @@
     "distill.mjs",
     "distill-prompt.mjs",
     "always.mjs",
+    "cloud.mjs",
     "mark-keep.mjs",
     "mark-current-keep.mjs",
     "README.md",

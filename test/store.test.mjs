@@ -85,7 +85,7 @@ test("mode: 'semantic' ignores the lexical leg (pure cosine order)", () => {
 });
 
 test('migrations are idempotent and triggers keep FTS in sync (insert + delete)', () => {
-  const CURRENT = 3; // bump when adding a migration
+  const CURRENT = 4; // bump when adding a migration
   assert.equal(db.prepare('PRAGMA user_version').get().user_version, CURRENT);
   const again = openDb(); // same file, second connection: migrate() must be a no-op
   assert.equal(again.prepare('PRAGMA user_version').get().user_version, CURRENT);
