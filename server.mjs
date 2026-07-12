@@ -12,6 +12,7 @@ import { openDb, searchChunks, listProjects, canonicalProject, recentActivity, w
 import { buildContext } from './context.mjs';
 import { gitRootName, findCurrentTranscript } from './transcripts.mjs';
 import { embedOne, embed } from './embed.mjs';
+import { autoSync } from './cloud.mjs';
 
 const db = openDb();
 
@@ -188,6 +189,12 @@ server.tool(
         return `✗ [${m.type}] ${m.title} — ${e.message}`;
       }
     });
+    // Team auto-sync (no-op unless `brain-rag cloud login` ran and auto is on).
+    // Best-effort by design: offline leaves rows pending for the next save/sync.
+    const team = await autoSync(db);
+    if (team?.pushed) lines.push(`☁ auto-synced ${team.pushed} to the team store`);
+    if (team?.rejected) lines.push(`☁ ${team.rejected} rejected by the team store (detectable secret?) — kept local; fix and re-save, or mark private:true`);
+    if (team?.offline) lines.push('☁ team endpoint unreachable — memories kept pending, will sync on the next save');
     return { content: [{ type: 'text', text: lines.join('\n') }] };
   }
 );

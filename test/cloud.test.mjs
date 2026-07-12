@@ -11,7 +11,7 @@ process.env.BRAIN_DIR = dir;
 process.env.BRAIN_DB = join(dir, 'brain.db');
 
 const { openDb, saveMemory } = await import('../store.mjs');
-const { pendingMemories, toPushItem, loadCloudConfig } = await import('../cloud.mjs');
+const { pendingMemories, toPushItem, loadCloudConfig, autoSync } = await import('../cloud.mjs');
 
 const vec = (a, b) => { const v = new Array(8).fill(0); v[0] = a; v[1] = b; return v; };
 const db = openDb();
@@ -55,6 +55,45 @@ test('loadCloudConfig: absent -> null, malformed -> null, valid -> parsed', () =
   const good = join(dir, 'good.json');
   writeFileSync(good, JSON.stringify({ endpoint: 'https://x', apiKey: 'brk_' + 'a'.repeat(40) }));
   assert.equal(loadCloudConfig(good).endpoint, 'https://x');
+});
+
+test('autoSync: no config -> no-op null; auto:false -> no-op; on -> pushes pending and marks synced; offline -> pending intact', async (t) => {
+  const realFetch = global.fetch;
+  t.after(() => { global.fetch = realFetch; });
+  // no config file yet in BRAIN_DIR -> null, and crucially NO fetch attempted
+  global.fetch = () => { throw new Error('fetch must not be called without config'); };
+  assert.equal(await autoSync(db), null);
+
+  const conf = { endpoint: 'https://team.example', apiKey: 'brk_' + 'a'.repeat(40) };
+  writeFileSync(join(dir, 'cloud.json'), JSON.stringify({ ...conf, auto: false }));
+  assert.equal(await autoSync(db), null, 'auto:false is a hard off switch');
+
+  writeFileSync(join(dir, 'cloud.json'), JSON.stringify({ ...conf, auto: true }));
+  // undo the earlier test's future timestamps: realistic state = unsynced, edited in the past
+  db.prepare('UPDATE memories SET synced_at = NULL, updated_at = ? WHERE private = 0')
+    .run(new Date(Date.now() - 1000).toISOString());
+  const before = pendingMemories(db).length;
+  assert.ok(before > 0, 'test premise: something pending');
+
+  // happy path: fake server accepts everything
+  const calls = [];
+  global.fetch = async (url, opts) => {
+    calls.push({ url, body: JSON.parse(opts.body) });
+    return { ok: true, json: async () => ({ results: JSON.parse(opts.body).memories.map(() => ({ action: 'created', id: 1 })) }) };
+  };
+  const res = await autoSync(db);
+  assert.equal(res.pushed, before);
+  assert.equal(pendingMemories(db).length, 0, 'pushed rows are marked synced');
+  assert.ok(calls[0].url.startsWith('https://team.example/v1/memories/push'));
+  assert.ok(!JSON.stringify(calls).includes('stays home'), 'private memory never reaches the wire');
+
+  // offline: a NEW pending memory + dead endpoint -> silent, row stays pending
+  saveMemory(db, { type: 'fact', project: 'p', title: 'queued while offline', content: 'waits for reconnection' }, vec(2, 2));
+  global.fetch = async () => { throw new Error('ECONNREFUSED'); };
+  const off = await autoSync(db);
+  assert.equal(off.offline, true);
+  assert.equal(off.pushed, 0);
+  assert.equal(pendingMemories(db).length, 1, 'nothing lost, still pending');
 });
 
 test.after(() => rmSync(dir, { recursive: true, force: true }));
