@@ -1,6 +1,6 @@
 {
   "name": "brain-rag",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Local, private RAG second brain over your Claude Code & Codex transcripts, served back to both agents as an MCP server.",
   "type": "module",
   "bin": {
@@ -29,6 +29,8 @@
     "distill.mjs",
     "distill-prompt.mjs",
     "always.mjs",
+    "never.mjs",
+    "config.mjs",
     "cloud.mjs",
     "mark-keep.mjs",
     "mark-current-keep.mjs",

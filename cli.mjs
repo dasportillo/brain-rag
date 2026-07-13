@@ -16,11 +16,14 @@ switch (cmd) {
   case 'state':        await import('./state.mjs'); break;              // dump a project's recent activity
   // context exports main() instead of running on import — tests import its pure helpers.
   case 'context':      await (await import('./context.mjs')).main(); break; // assembled project context (also the SessionStart hook)
-  case 'mark-keep':    await import('./mark-keep.mjs'); break;          // SessionStart opt-in hook
+  // mark-keep/distill/always/never/config export main() instead of running on import — tests import
+  // their pure helpers; the SessionStart hook runs `node mark-keep.mjs` directly (self-executing guard).
+  case 'mark-keep':    await (await import('./mark-keep.mjs')).main(); break; // SessionStart keep hook
   case 'mark-current': await import('./mark-current-keep.mjs'); break;  // /brain backend
-  // distill/always export main() instead of running on import — tests import their pure helpers.
   case 'distill':      await (await import('./distill.mjs')).main(); break; // batch memory extraction (headless claude -p)
   case 'always':       await (await import('./always.mjs')).main(); break;  // standing per-repo opt-in (always.list)
+  case 'never':        await (await import('./never.mjs')).main(); break;   // standing per-repo opt-OUT (never.list)
+  case 'default':      await (await import('./config.mjs')).main(); break;  // capture-by-default toggle (opt-out mode)
   case 'cloud':        await (await import('./cloud.mjs')).main(); break;   // team sync (Brain-RAG Teams): login|sync|status|logout
   case 'install':      await import('./install.mjs'); break;            // wire into Claude Code + Codex
   case 'uninstall':    await import('./uninstall.mjs'); break;          // unregister + remove commands
@@ -47,8 +50,10 @@ Usage: brain-rag <command>
   distill         Extract durable memories from indexed sessions via headless claude — costs tokens
                   [--project X] [--session <transcript>] [--limit N] [--dry] [--hook]
   always          Standing opt-in: always keep sessions of a repo — add [path] | remove [path] | list
+  never           Standing opt-OUT: never keep sessions of a repo — add [path] | remove [path] | list
+  default         Capture-by-default (opt-out mode): on | off | status — keep EVERY session unless in never.list
   cloud           Team sync (Brain-RAG Teams): login | sync [--review] | status | logout — only distilled memories, never transcripts
-  mark-keep       SessionStart hook: opt a BRAIN=1 (or always-listed) session in
+  mark-keep       SessionStart hook: decide + record whether this session is kept (BRAIN / never / always / default)
   mark-current    Opt the CURRENT session in (the /brain command backend)
 `);
     if (cmd && !['help', '--help', '-h'].includes(cmd)) process.exit(1);

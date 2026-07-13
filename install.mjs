@@ -126,8 +126,9 @@ console.log(`
     { "type": "command", "command": "${NPX} context --hook", "timeout": 10 }
 
   OPTIONAL auto-extraction — distill each opted-in session into durable memories (Layer 2)
-  when it ends. It runs a headless 'claude -p' PER kept session, so it COSTS TOKENS; the
-  in-session /distill command works without it. Append to the SessionEnd hooks array above:
+  when it ends, and (if 'cloud login' ran) push them to the team store in the same step. It runs
+  a headless 'claude -p' PER kept session, so it COSTS TOKENS; the in-session /distill command
+  works without it. Append to the SessionEnd hooks array above:
 
     { "type": "command",
       "command": "nohup ${NPX} distill --hook >> \\"${BRAIN_DIR}/distill.log\\" 2>&1 &", "timeout": 30 }
@@ -138,6 +139,9 @@ console.log(`
 
   Standing opt-in: '${NPX} always add' inside a repo keeps EVERY session started there (no BRAIN=1).
   Mid-session: /brain opts the current conversation in · /state writes the current-state note.
+
+  Opt-OUT mode (capture-all): '${NPX} default on' keeps EVERY session everywhere; exclude a repo
+  with '${NPX} never add' inside it. Precedence: BRAIN=1/0 > never.list > always.list > default.
 
   Tip: for zero npx overhead on every hook, 'npm i -g ${NAME}' and replace '${NPX}' with 'brain-rag'.
 `);

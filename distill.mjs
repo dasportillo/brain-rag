@@ -11,12 +11,15 @@
 //   brain-rag distill --dry               # list what WOULD run; spends nothing
 //   brain-rag distill --hook              # SessionEnd mode: distill the session from hook stdin
 //
-// NO top-level side effects: cli.mjs calls main(); tests import the pure helpers below.
+// Importing runs nothing (tests import the pure helpers below); main() runs via cli.mjs or the
+// self-exec guard at EOF (so `node distill.mjs --hook` works too, not only `brain-rag distill`).
 import { readFileSync, existsSync } from 'node:fs';
-import { join, basename } from 'node:path';
+import { join, basename, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { openDb, aliasMembers, saveMemory, MEMORY_TYPES, BRAIN_DIR } from './store.mjs';
 import { headlessDistillPrompt } from './distill-prompt.mjs';
+import { autoSync } from './cloud.mjs';
 
 // ---------------------------------------------------------------------------
 // Pure helpers (unit-tested, dep-free)
@@ -194,6 +197,11 @@ async function hookMain() {
     if (!row) return;
     console.log(`[distill --hook] ${new Date().toISOString()} ${row.project} · ${row.path}`);
     console.log('  ' + await distillSession(db, row));
+    // Push the freshly distilled memories to the team store (no-op unless `cloud login` ran and
+    // auto is on). Best-effort: offline just leaves them pending for the next distill/sync.
+    const team = await autoSync(db);
+    if (team?.pushed) console.log(`  ☁ auto-synced ${team.pushed} to the team store`);
+    if (team?.offline) console.log('  ☁ team endpoint unreachable — kept pending for the next sync');
   } catch (e) {
     console.error(`[distill --hook] swallowed: ${e.message}`); // logged for distill.log, never rethrown
   }
@@ -241,4 +249,12 @@ export async function main() {
       console.error(`✗ ${r.path} — ${e.message}`);
     }
   }
+  // Flow the new memories to the team store (no-op unless connected). Same best-effort contract as
+  // the SessionEnd hook, so a manual `brain-rag distill` also reaches the team.
+  const team = await autoSync(db);
+  if (team?.pushed) console.log(`☁ auto-synced ${team.pushed} to the team store`);
 }
+
+// Run when invoked directly (`node distill.mjs …`, e.g. a SessionEnd hook). cli.mjs and tests
+// import main()/the pure helpers without triggering it.
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) main();

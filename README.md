@@ -158,6 +158,14 @@ Add to `~/.claude/settings.json` (the installer prints these ready to paste):
 ```
 
 Then `BRAIN=1 claude` (or a `claude --brain` shell alias) starts a session that remembers itself, and every opted-in session is re-indexed automatically when it ends. Codex sessions ride the same ingest.
+
+**Auto-distill + team sync at session end** (optional, costs tokens): append a distill hook to the `SessionEnd` array — it turns each kept session into typed memories and, if you've run `brain-rag cloud login`, pushes them to your team in the same step:
+
+```jsonc
+{ "type": "command", "command": "nohup npx -y brain-rag distill --hook >> \"$HOME/.claude/brain/distill.log\" 2>&1 &", "timeout": 30 }
+```
+
+**Capture-all (opt-out) mode:** prefer keeping everything by default? `brain-rag default on` keeps every session; exclude a repo with `brain-rag never add` inside it. Precedence: `BRAIN=1/0` > `never.list` > `always.list` > `default`.
 </details>
 
 ## 🏗️ Architecture
@@ -214,7 +222,7 @@ Your conversations contain **API keys, internal architecture, unreleased plans**
 
 - ✅ **Everything runs on your machine** — local embedding model, local database, zero external calls. Works offline.
 - ✅ **Secrets are scrubbed at ingest** — JWTs, AWS keys, GitHub/Slack tokens, private keys, `password=`-style values are redacted before anything is stored.
-- ✅ **Opt-in by default** — no session is indexed unless you opt it in (`/brain`, `BRAIN=1`, or an explicit `import`).
+- ✅ **Opt-in by default** — no session is indexed unless you opt it in (`/brain`, `BRAIN=1`, or an explicit `import`). Prefer the inverse? `brain-rag default on` captures every session (opt-out), and `brain-rag never add` excludes a repo.
 - ✅ **Right to forget** — `brain-rag forget <filter>` removes sessions from the index; `uninstall --purge` deletes everything.
 - ✅ **Retrieved memory is evidence, not instructions** — wrapped so past content can never override your agent's current behavior.
 
