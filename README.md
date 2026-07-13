@@ -70,7 +70,7 @@ Brain-RAG turns that archive into **long-term memory your agents actually use** 
 | 📍 **"Where did I leave off?"** | A curated per-project state note — what's in flight, what's decided, what's blocked, what's next — ready the moment you ask. |
 | 🔀 **One memory, all your agents** | Claude Code and Codex share the same brain out of the box. Any MCP-compatible agent (Cursor, Windsurf, VS Code) can connect. Your memory belongs to **you**, not to a vendor. |
 | ⚡ **Instant recall** | Finds the right moment across tens of thousands of indexed conversation fragments in ~90 ms — including exact identifiers like error strings, function names, and ARNs. |
-| 🔒 **100% local** | Local embedding model, local database, zero external API calls. Your conversations — which contain your secrets — never leave your machine. |
+| 🔒 **Local by default** | Local embedding model, local database, zero external API calls. Your conversations never leave your machine — the one exception is the optional **Brain Teams** sync, which shares only distilled memories, never raw transcripts. |
 | 🎛️ **Opt-in by default** | Nothing is saved unless you say so. One command opts a session in; everything else is forgotten. |
 
 ## 🎬 Real examples
@@ -220,7 +220,7 @@ Ablation on the same set: vector-only search scores Recall@8 **0.87** — the ex
 
 Your conversations contain **API keys, internal architecture, unreleased plans**. Brain-RAG is built around that fact:
 
-- ✅ **Everything runs on your machine** — local embedding model, local database, zero external calls. Works offline.
+- ✅ **Local by default** — local embedding model, local database, zero external calls; works offline. The only data that ever leaves is the optional **Brain Teams** sync: distilled Layer-2 memories (never raw transcripts), and only after you `brain-rag cloud login`.
 - ✅ **Secrets are scrubbed at ingest** — JWTs, AWS keys, GitHub/Slack tokens, private keys, `password=`-style values are redacted before anything is stored.
 - ✅ **Opt-in by default** — no session is indexed unless you opt it in (`/brain`, `BRAIN=1`, or an explicit `import`). Prefer the inverse? `brain-rag default on` captures every session (opt-out), and `brain-rag never add` excludes a repo.
 - ✅ **Right to forget** — `brain-rag forget <filter>` removes sessions from the index; `uninstall --purge` deletes everything.
@@ -231,7 +231,7 @@ Your conversations contain **API keys, internal architecture, unreleased plans**
 <details>
 <summary><b>Does this send my code or conversations anywhere?</b></summary>
 
-No. The embedding model runs in-process, the database is a local file, and the server only talks to your agent over stdio. There is no telemetry, no cloud, no account.
+No — the local brain sends nothing. The embedding model runs in-process, the database is a local file, and the server only talks to your agent over stdio: no telemetry, no cloud, no account. The one opt-in exception is **Brain Teams** (`brain-rag cloud login`), which syncs only distilled memories — never raw transcripts — to a team server you control.
 </details>
 
 <details>

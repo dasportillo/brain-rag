@@ -11,8 +11,9 @@ Two architectural decisions frame every version below:
    Extraction, synthesis, and query understanding are done by the LLM that is already running
    (Claude Code / Codex — the `/state` pattern generalized), never by the server calling external
    APIs. The server's job: store, index, filter, rank, assemble.
-2. **Opt-in stays.** Automatic learning applies to opted-in sessions only (with a per-project
-   "always opt in" convenience). Privacy posture is a feature, not an accident.
+2. **Opt-in by default.** Automatic learning applies to opted-in sessions only — per-session
+   `BRAIN=1`, or the per-repo `always` / capture-all `default` conveniences with a `never` denylist
+   for exclusions. Privacy posture is a feature, not an accident.
 
 Each version ships only if the eval says it should — which is why the eval comes first.
 
