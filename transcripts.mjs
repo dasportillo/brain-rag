@@ -28,11 +28,32 @@ export function gitRoot(cwd) {
   if (!cwd) return null;
   let dir = cwd;
   for (;;) {
-    if (existsSync(join(dir, '.git'))) return dir;
+    const dotGit = join(dir, '.git');
+    if (existsSync(dotGit)) return worktreeMainRoot(dotGit) ?? dir;
     const parent = dirname(dir);
     if (parent === dir) return null; // reached the filesystem root: not inside a repo
     dir = parent;
   }
+}
+
+// A linked WORKTREE has a `.git` FILE ("gitdir: <main>/.git/worktrees/<name>") instead of a
+// directory. Naming the project after the worktree folder fragments one repo into many
+// throwaway "projects" (Claude Code generates worktrees under <repo>/.claude/worktrees/<random>;
+// measured 2026-09-21: 3 sessions of smd-rips filed under mutable-knitting-cherny & co, issue #30).
+// Resolve to the MAIN repo root: the parent of the `.git` dir the pointer names. Falls back to the
+// path shape when the pointer is unreadable; null = a regular repo (caller keeps `dir`).
+function worktreeMainRoot(dotGit) {
+  try {
+    if (!statSync(dotGit).isFile()) return null;
+    const m = readFileSync(dotGit, 'utf8').match(/^gitdir:\s*(.+?)\s*$/m);
+    if (m) {
+      const gitdir = m[1].trim(); // …/<main>/.git/worktrees/<name>
+      const wt = gitdir.match(/^(.*)\/\.git\/worktrees\/[^/]+\/?$/);
+      if (wt) return wt[1];
+    }
+  } catch { /* unreadable pointer: fall through to the path shape */ }
+  const shape = dirname(dotGit).match(/^(.*)\/\.claude\/worktrees\/[^/]+$/);
+  return shape ? shape[1] : null;
 }
 
 // PRIMARY project name: name a project by its GIT REPO, not the folder path — so the same repo is ONE
