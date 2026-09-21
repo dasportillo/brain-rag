@@ -8,6 +8,7 @@ switch (cmd) {
   case 'serve':        await import('./server.mjs'); break;              // MCP stdio server (claude/codex mcp add)
   case 'ingest':       await import('./ingest.mjs'); break;             // index opted-in transcripts
   case 'import':       await import('./import.mjs'); break;             // backfill existing transcripts
+  case 'onboard':      await (await import('./onboard.mjs')).main(); break; // guided: pick projects → import → distill → team sync
   case 'forget':       await import('./forget.mjs'); break;             // remove sessions from the index
   case 'relabel':      await import('./relabel.mjs'); break;            // re-derive project names by git repo (no re-embed)
   case 'stats':        process.argv.push('--stats'); await import('./ingest.mjs'); break;
@@ -37,6 +38,9 @@ Usage: brain-rag <command>
   serve           Run the MCP server (stdio) — this is what 'claude mcp add' / 'codex mcp add' launches
   ingest          Ingest opted-in transcripts into the index
   import [filter] Backfill EXISTING conversations into the brain (--dry to preview)
+  onboard         Joining a team? Pick which projects to bring over, then import + distill your
+                  existing history and sync it to the team store in one guided run — costs tokens
+                  [--projects a,b | --all] [--yes] [--dry] [--limit N] [--concurrency N] [--model M] [--no-sync]
   forget <filter> Remove matching sessions from the index + keep.list (--all, --dry)
   relabel         Re-derive project names from each session's git repo (no re-embed; --dry)
   stats           Print index status
@@ -48,7 +52,7 @@ Usage: brain-rag <command>
                   knowledge + TODOs + conflicts); --hook = SessionStart injection (silent
                   on repos with no brain data)
   distill         Extract durable memories from indexed sessions via headless claude — costs tokens
-                  [--project X] [--session <transcript>] [--limit N] [--dry] [--hook]
+                  [--project X] [--session <transcript>] [--limit N] [--model M] [--concurrency N] [--dry] [--hook]
   always          Standing opt-in: always keep sessions of a repo — add [path] | remove [path] | list
   never           Standing opt-OUT: never keep sessions of a repo — add [path] | remove [path] | list
   default         Capture-by-default (opt-out mode): on | off | status — keep EVERY session unless in never.list

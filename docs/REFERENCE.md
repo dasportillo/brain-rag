@@ -14,6 +14,8 @@ npx -y brain-rag <command>
   serve           Run the MCP server (stdio) — what 'claude mcp add' / 'codex mcp add' launches
   ingest          Index opted-in transcripts (incremental)
   import [filter] Backfill EXISTING conversations (both agents' stores; --dry to preview)
+  onboard         Guided team ramp-up: pick projects → import → distill (concurrent, cheap model) → team sync
+                  [--projects a,b | --all] [--yes] [--dry] [--limit N] [--concurrency N] [--model M] [--no-sync]
   forget <filter> Remove matching sessions from the index + keep.list (--all, --dry)
   relabel         Re-derive project names from each session's git repo (no re-embed; --dry)
   stats           Print index status

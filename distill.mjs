@@ -8,6 +8,8 @@
 //   brain-rag distill --project X         # only that project's sessions (alias-aware)
 //   brain-rag distill --session <path>    # one specific transcript (re-distills even if done)
 //   brain-rag distill --limit N           # sessions per run (default 10 — each run costs tokens)
+//   brain-rag distill --model M           # model for the headless extraction (alias like sonnet, or full id)
+//   brain-rag distill --concurrency N     # parallel extractions (default 1)
 //   brain-rag distill --dry               # list what WOULD run; spends nothing
 //   brain-rag distill --hook              # SessionEnd mode: distill the session from hook stdin
 //
@@ -16,7 +18,8 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join, basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { openDb, aliasMembers, saveMemory, MEMORY_TYPES, BRAIN_DIR } from './store.mjs';
 import { headlessDistillPrompt } from './distill-prompt.mjs';
 import { autoSync } from './cloud.mjs';
@@ -133,9 +136,33 @@ const sessionRef = (row) => row.session ?? basename(row.path, '.jsonl');
 // and the batch would re-pay its tokens (and re-save near-duplicate memories).
 export const sessionRefs = (row) => [...new Set([row.session, basename(row.path, '.jsonl')])].filter(Boolean);
 
-function hasClaude() {
+export function hasClaude() {
   try { execFileSync('claude', ['--version'], { stdio: 'ignore' }); return true; }
   catch { return false; }
+}
+
+// Default extractor runner: one headless `claude -p` per session. `model` is passed through
+// (an alias like 'sonnet' or a full id); undefined = the user's default model. 5-min timeout: a
+// wedged extraction must not pin a background hook — or a whole onboarding batch — forever.
+const execFileP = promisify(execFile);
+async function runClaude(prompt, { model } = {}) {
+  const args = ['-p', prompt, '--output-format', 'json'];
+  if (model) args.push('--model', model);
+  const { stdout } = await execFileP('claude', args,
+    { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 300000 });
+  return stdout;
+}
+
+// The embedder is shared by every concurrent extraction; calls are serialized so parallel
+// distills never hit the onnx session at the same time (the DB writes are sync anyway).
+let embedChain = Promise.resolve();
+function embedSerialized(texts, embedFn) {
+  const run = embedChain.then(async () => {
+    const embed = embedFn ?? (await import('./embed.mjs')).embed; // lazy: only the real save path loads the model
+    return embed(texts);
+  });
+  embedChain = run.catch(() => {}); // a failure must not poison the chain for the next caller
+  return run;
 }
 
 function openTodos(db, project) {
@@ -147,33 +174,70 @@ function openTodos(db, project) {
 }
 
 // Distill ONE indexed session: digest -> headless claude -> parse -> embed -> save.
-// Returns a one-line human summary (both the CLI loop and the hook log print it).
-async function distillSession(db, row) {
+// Returns { count, lines, note }: count = memories saved, lines = one per memory, note = why
+// nothing was saved. `run`/`embed` are injectable (tests; never spawn claude or load the model).
+export async function distillSession(db, row, { model, run = runClaude, embed } = {}) {
   const chunks = db.prepare('SELECT role, text FROM chunks WHERE path = ? ORDER BY id').all(row.path);
-  if (!chunks.length) return 'skipped (no indexed chunks — run ingest first)';
+  if (!chunks.length) return { count: 0, lines: [], note: 'skipped (no indexed chunks — run ingest first)' };
   const todos = openTodos(db, row.project);
   const input = buildDistillInput(chunks, row.title) + formatOpenTodos(todos);
-  // 5-min timeout: a wedged extraction must not pin a background hook forever.
-  const out = execFileSync('claude', ['-p', headlessDistillPrompt(input), '--output-format', 'json'],
-    { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'], timeout: 300000 });
+  const out = await run(headlessDistillPrompt(input), { model });
   // --output-format json wraps the answer: {"type":"result","result":"<the model's text>", …}.
   // Unwrap when possible; parseMemoriesJson copes with raw text either way.
   let text = out;
   try { const o = JSON.parse(out); if (o && typeof o.result === 'string') text = o.result; } catch { /* raw text */ }
   const memories = parseMemoriesJson(text);
-  if (!memories.length) return 'no durable memories extracted';
+  if (!memories.length) return { count: 0, lines: [], note: 'no durable memories extracted' };
   // supersedes may only retire an OPEN TODO we actually showed — a hallucinated id must not
   // silently retire unrelated live knowledge (saveMemory would obey it).
   const todoIds = new Set(todos.map(t => t.id));
   for (const m of memories) if (m.supersedes && !todoIds.has(m.supersedes)) delete m.supersedes;
 
-  const { embed } = await import('./embed.mjs'); // lazy: only the real save path loads the model
-  const vecs = await embed(memories.map(m => `${m.title}\n${m.content}`));
+  const vecs = await embedSerialized(memories.map(m => `${m.title}\n${m.content}`), embed);
   const lines = memories.map((m, i) => {
     const r = saveMemory(db, { ...m, project: row.project, source_session: sessionRef(row) }, vecs[i]);
     return `#${r.id} ${r.action} [${m.type}] ${m.title}${r.superseded ? ` (retired #${r.superseded})` : ''}`;
   });
-  return `${memories.length} memories\n    ` + lines.join('\n    ');
+  return { count: memories.length, lines };
+}
+
+// Human one-liner (+ indented memory lines) for a distillSession result.
+export const formatDistillResult = (r) =>
+  r.count ? `${r.count} memories\n    ` + r.lines.join('\n    ') : r.note;
+
+// Indexed sessions that have NOT produced memories yet, newest first. `paths` restricts to a
+// set of transcript paths (onboard's selected projects); `project` is alias-aware.
+export function undistilledSessions(db, { project = null, paths = null } = {}) {
+  let rows = db.prepare('SELECT path, project, session, title FROM sessions ORDER BY mtime DESC').all();
+  if (project) { const m = new Set(aliasMembers(project)); rows = rows.filter(r => m.has(r.project)); }
+  if (paths) rows = rows.filter(r => paths.has(r.path));
+  const done = new Set(db.prepare('SELECT DISTINCT source_session s FROM memories WHERE source_session IS NOT NULL').all().map(r => r.s));
+  return rows.filter(r => !sessionRefs(r).some(ref => done.has(ref)));
+}
+
+// Distill many sessions with a bounded worker pool. Order is preserved in the input (newest
+// first from undistilledSessions), so on a partial run the CURRENT knowledge lands first.
+// onResult(row, result | { error }, index) fires per session as it completes.
+// Returns { done, failed, memories }.
+export async function distillBatch(db, rows, { concurrency = 1, model, onResult, run, embed } = {}) {
+  const totals = { done: 0, failed: 0, memories: 0 };
+  let next = 0;
+  const worker = async () => {
+    while (next < rows.length) {
+      const i = next++;
+      const row = rows[i];
+      try {
+        const r = await distillSession(db, row, { model, run, embed });
+        totals.done++; totals.memories += r.count;
+        onResult?.(row, r, i);
+      } catch (e) {
+        totals.failed++;
+        onResult?.(row, { error: e.message }, i);
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(concurrency, rows.length)) }, worker));
+  return totals;
 }
 
 // SessionEnd hook mode. A hook must NEVER break the host: every missing prerequisite (not
@@ -196,7 +260,7 @@ async function hookMain() {
     const row = db.prepare('SELECT path, project, session, title FROM sessions WHERE path = ?').get(tp);
     if (!row) return;
     console.log(`[distill --hook] ${new Date().toISOString()} ${row.project} · ${row.path}`);
-    console.log('  ' + await distillSession(db, row));
+    console.log('  ' + formatDistillResult(await distillSession(db, row)));
     // Push the freshly distilled memories to the team store (no-op unless `cloud login` ran and
     // auto is on). Best-effort: offline just leaves them pending for the next distill/sync.
     const team = await autoSync(db);
@@ -218,16 +282,19 @@ export async function main() {
   const project = val('--project', null);
   const session = val('--session', null);
   const limit = Number(val('--limit', 10));
+  const model = val('--model', null);
+  const concurrency = Number(val('--concurrency', 1));
   const db = openDb();
 
-  let rows = db.prepare('SELECT path, project, session, title FROM sessions ORDER BY mtime DESC').all();
-  if (project) { const m = new Set(aliasMembers(project)); rows = rows.filter(r => m.has(r.project)); }
-  if (session) rows = rows.filter(r => r.path === session || r.path.includes(session));
-  // Skip sessions that already produced memories: repeated runs walk the backlog instead of
-  // re-paying tokens. An explicit --session re-distills on purpose.
-  if (!session) {
-    const done = new Set(db.prepare('SELECT DISTINCT source_session s FROM memories WHERE source_session IS NOT NULL').all().map(r => r.s));
-    rows = rows.filter(r => !sessionRefs(r).some(ref => done.has(ref)));
+  let rows;
+  if (session) {
+    // An explicit --session re-distills on purpose, even if it already produced memories.
+    rows = db.prepare('SELECT path, project, session, title FROM sessions ORDER BY mtime DESC').all()
+      .filter(r => r.path === session || r.path.includes(session));
+  } else {
+    // Skip sessions that already produced memories: repeated runs walk the backlog instead of
+    // re-paying tokens.
+    rows = undistilledSessions(db, { project });
   }
   const batch = rows.slice(0, limit);
   if (!batch.length) { console.log('distill: nothing to do (no matching un-distilled sessions).'); return; }
@@ -242,13 +309,13 @@ export async function main() {
     console.error("distill: 'claude' CLI not found — install Claude Code, or distill in-session with /distill.");
     process.exit(1);
   }
-  for (const r of batch) {
-    try {
-      console.log(`▸ ${r.project} · ${r.title ?? sessionRef(r)}\n  ${await distillSession(db, r)}`);
-    } catch (e) {
-      console.error(`✗ ${r.path} — ${e.message}`);
-    }
-  }
+  await distillBatch(db, batch, {
+    concurrency, model,
+    onResult: (r, res) => {
+      if (res.error) console.error(`✗ ${r.path} — ${res.error}`);
+      else console.log(`▸ ${r.project} · ${r.title ?? sessionRef(r)}\n  ${formatDistillResult(res)}`);
+    },
+  });
   // Flow the new memories to the team store (no-op unless connected). Same best-effort contract as
   // the SessionEnd hook, so a manual `brain-rag distill` also reaches the team.
   const team = await autoSync(db);
