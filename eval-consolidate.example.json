@@ -1,0 +1,13 @@
+{
+  "project": "my-project",
+  "note": "Shape of eval-consolidate.local.json (gitignored). Ids are memory ids in YOUR brain.db. Label pairs as dup (same knowledge — one should retire or they should merge) or distinct (both must stay). Clusters carry the verdict the judge SHOULD reach.",
+  "pairs": [
+    { "a": 101, "b": 102, "label": "dup" },
+    { "a": 101, "b": 130, "label": "distinct" }
+  ],
+  "clusters": [
+    { "members": [101, 102], "expect": "supersede" },
+    { "members": [140, 141], "expect": "keep" },
+    { "members": [150, 151], "expect": "close_todo" }
+  ]
+}

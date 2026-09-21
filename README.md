@@ -279,6 +279,7 @@ Brain-RAG is evolving from *searchable history* into a full **long-term memory s
 - ✅ Hybrid retrieval (semantic + exact-term + recency), measured by a growing eval suite
 - ✅ Layer 2: distilled, typed memories with provenance and temporal lifecycle
 - ✅ Multi-agent: Claude Code + Codex sharing one brain
+- ✅ Team ramp-up: `brain-rag onboard` turns a developer's existing history into team memory; `brain-rag consolidate` judges the near-duplicates bulk distillation leaves behind (merge / supersede / close resolved TODOs — nothing deleted)
 - 🔜 Automatic distillation at session end — knowledge extraction with zero manual steps
 - 🔜 `get_context`: a ready-made project briefing (state + decisions + open TODOs + conflicts) injected when a session starts
 - 🔜 Entity graph (services ↔ databases ↔ projects) complementing search

@@ -76,3 +76,42 @@ Notes on the 2026-07-10 baseline:
   sliced by class.
 - The self-echo guard (chunks containing the literal query are ignored) is active from this
   baseline on, so scores are not inflated by indexed eval sessions.
+
+## Consolidation eval (`node eval-consolidate.mjs [--judge]`, issue #26)
+
+Bulk distillation (`onboard`, batch `distill`) extracts sessions in isolation, so
+`brain-rag consolidate` proposes near-duplicate clusters (deterministic, two-signal) and a
+headless judge rules on each. Both halves are measured against a labeled set built from a real
+corpus (`eval-consolidate.local.json`, gitignored; shape in `eval-consolidate.example.json`).
+
+| Date | Corpus | Pairs (dup / distinct) | Clusterer @ sim 0.85 · lex 0.15 | Judge (sonnet) | Knowledge loss |
+|---|---|---|---|---|---|
+| 2026-09-21 | midiv2 · 20 sessions → 33 memories | 27 (3 / 24) | precision 0.40 · recall 0.67 · F1 0.50 (fp 3, fn 1) | 6/7 correct (0.86), 1 unusable, 0 wrong | **0** retirements, **0** distinct pairs merged |
+
+Notes on the 2026-09-21 baseline:
+
+- **The clusterer's job is recall, not precision.** Its 3 false positives are exactly the clusters
+  the judge must see (todo + related bug/fact, bug + pending-decision todo); its 1 miss is a
+  cross-type duplicate (`learning` vs `fact`) that the type rule cannot propose — an accepted gap,
+  see below. Cosine alone (lex 0) proposes 20-24 false pairs on this set; the lexical floor is what
+  makes proposing affordable (`e5-small` clusters tangential technical text at ~0.80-0.85).
+- **The judge's contract is "never lose knowledge", then accuracy.** First run (prompt v1):
+  5/7, one `close_todo` that retired an open todo on the strength of a bug report, and one `merge`
+  that folded a standalone code-location fact into a todo. Prompt v2 states *types are
+  boundaries* and *a finding does not close a todo*, asks for the reason before the verdict, and
+  `parseVerdict` enforces the type boundary in code: `supersede`/`merge` may only retire members of
+  the survivor's type; a merge left with < 2 same-type members is rejected. Second run: 6/7, both
+  guards at 0. The remaining "unusable" is the guard doing its job — the judge asserted two
+  different-type memories were both `learning` and tried to supersede; the parser refused and the
+  cluster was left intact.
+- **Accepted gap:** duplicates across types (same lesson filed as `learning` and as `fact`) are
+  left alone by design. Merging across types is where knowledge silently disappears (a fact
+  retiring with the todo it was folded into), so the policy trades that recall for safety.
+- **End-to-end on the same copy:** `consolidate --project midiv2` judged 3 clusters, applied 3
+  (1 supersede, 2 keep), retired 1 memory (survivor inherits `supersedes` + union `sources`),
+  wrote 3 ledger rows; the rerun found nothing left to judge. Nothing deleted: 33 rows before and
+  after, 32 active.
+- **Variance:** one cluster flipped verdict between two identical runs of prompt v1
+  (`close_todo` → `keep`). Single-sample accuracy on 7 clusters is a smoke signal, not a
+  statistic; the two zero-tolerance counters (knowledge-loss retirements, distinct pairs merged)
+  are the gate. Grow the labeled set from the next real onboard before tuning thresholds.

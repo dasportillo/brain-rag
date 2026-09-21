@@ -19,6 +19,7 @@
     "ingest.mjs",
     "import.mjs",
     "onboard.mjs",
+    "consolidate.mjs",
     "forget.mjs",
     "relabel.mjs",
     "transcripts.mjs",

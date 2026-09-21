@@ -15,7 +15,9 @@ npx -y brain-rag <command>
   ingest          Index opted-in transcripts (incremental)
   import [filter] Backfill EXISTING conversations (both agents' stores; --dry to preview)
   onboard         Guided team ramp-up: pick projects → import → distill (concurrent, cheap model) → team sync
-                  [--projects a,b | --all] [--yes] [--dry] [--limit N] [--concurrency N] [--model M] [--no-sync]
+                  [--projects a,b | --all] [--yes] [--dry] [--limit N] [--concurrency N] [--model M] [--no-sync] [--consolidate]
+  consolidate     Judge near-duplicate memories (merge / supersede / close resolved TODOs / keep) via headless claude;
+                  losers retire to 'superseded', nothing is deleted. --project X | --all-projects [--dry] [--review] [--model M]
   forget <filter> Remove matching sessions from the index + keep.list (--all, --dry)
   relabel         Re-derive project names from each session's git repo (no re-embed; --dry)
   stats           Print index status
