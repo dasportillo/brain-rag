@@ -137,6 +137,9 @@ console.log(`
     claude() { local b=0 a=(); for x in "$@"; do [ "$x" = --brain ] && b=1 || a+=("$x"); done;
       if (( b )); then BRAIN=1 command claude "\${a[@]}"; else command claude "\${a[@]}"; fi; }
 
+  Joining a team that uses Brain-RAG Teams? '${NPX} onboard' picks which of your existing projects
+  to bring over, imports + distills their history and syncs the memories to the team in one run.
+
   Standing opt-in: '${NPX} always add' inside a repo keeps EVERY session started there (no BRAIN=1).
   Mid-session: /brain opts the current conversation in · /state writes the current-state note.
 

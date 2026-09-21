@@ -137,6 +137,8 @@ npx -y brain-rag import          # index your existing history (runs locally)
 npx -y brain-rag import --dry    # preview first
 ```
 
+> **Joining a team on Brain-RAG Teams?** Run `npx -y brain-rag onboard` instead. It lists the projects on your machine, lets you pick which ones to bring over (personal repos stay out), shows the token cost up front, then imports, distills and syncs their history to the team store in one guided run. `--dry` previews everything without spending a token.
+
 **2 · Ask.** Open your agent in any project and ask *"where did I leave off?"*, *"what do we know about this repo?"*, *"how did I solve X?"*. The agent queries the brain on its own.
 
 **3 · Keep it growing:**

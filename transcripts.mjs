@@ -179,12 +179,22 @@ export function isCodexRollout(filePath) {
   return fileHead(filePath, 256).includes('"type":"session_meta"');
 }
 
-// The cwd of a Codex rollout without parsing the whole file: session_meta is always the
-// first line and cwd appears before the (huge) base_instructions blob.
-export function codexHeadCwd(filePath) {
-  const m = fileHead(filePath).match(/"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+// The cwd of a transcript WITHOUT parsing the whole file (they can be megabytes): both hosts
+// write a "cwd" field near the top — Codex in its first-line session_meta (before the huge
+// base_instructions blob), Claude Code on every user/assistant line. Reads only the head.
+export function headCwd(filePath, n = 2048) {
+  const m = fileHead(filePath, n).match(/"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"/);
   if (!m) return null;
   try { return JSON.parse(`"${m[1]}"`); } catch { return null; }
+}
+export const codexHeadCwd = (filePath) => headCwd(filePath);
+
+// Cheap project label for a transcript — the same rule ingest applies after a full parse
+// (git repo of the cwd, else the dashified path), fed from the file head. Lets discovery over
+// hundreds of transcripts (onboard, import) group by project without parsing any of them.
+export function sessionProject(filePath) {
+  const cwd = headCwd(filePath, 16384);
+  return (cwd && gitRootName(cwd)) || projectFromPath(filePath);
 }
 
 // Codex counterpart of parseTranscript — same { turns, title, cwd } shape.

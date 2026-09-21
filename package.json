@@ -18,6 +18,7 @@
     "rerank-blend.mjs",
     "ingest.mjs",
     "import.mjs",
+    "onboard.mjs",
     "forget.mjs",
     "relabel.mjs",
     "transcripts.mjs",
