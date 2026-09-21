@@ -21,3 +21,6 @@ models/
 
 # OS
 .DS_Store
+
+# Consolidation eval labels (contain memory text from your projects)
+eval-consolidate.local.json

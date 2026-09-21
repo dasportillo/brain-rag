@@ -187,6 +187,45 @@ function migrate(db) {
       PRAGMA user_version = 4;
     `);
   }
+  if (version() < 5) {
+    // v5: CONSOLIDATION (issue #26). `sources` = JSON array of every session a memory draws
+    // from — a memory merged out of several near-duplicates keeps ALL their provenance while
+    // source_session stays the single primary key the rest of the code (and the team API)
+    // already understands. `consolidations` = the judged-cluster ledger: one row per verdict,
+    // keyed by the sorted member ids, so a rerun never re-pays tokens to re-judge a cluster it
+    // already ruled on (merge/supersede change the active set; `keep` is what needs the memo).
+    db.exec(`
+      BEGIN;
+      ALTER TABLE memories ADD COLUMN sources TEXT;
+      CREATE TABLE IF NOT EXISTS consolidations (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        project    TEXT NOT NULL,
+        member_ids TEXT NOT NULL,
+        verdict    TEXT NOT NULL,
+        result_id  INTEGER,
+        reason     TEXT,
+        judged_at  TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_consolidations_members ON consolidations(member_ids);
+      COMMIT;
+      PRAGMA user_version = 5;
+    `);
+  }
+}
+
+// Retire memories in bulk (consolidation): status -> `status`, valid_until/updated_at stamped
+// so the change is visible to search (hidden by default) and to team sync (updated_at >
+// synced_at re-pushes the new status). `successor` is recorded as `supersedes` ON the
+// successor side by the caller; here we only close the retired rows. Only ACTIVE rows change —
+// an already-retired id is a no-op, never a resurrection. Returns the number of rows retired.
+export function retireMemories(db, ids, { status = 'superseded' } = {}) {
+  if (!MEMORY_STATUSES.includes(status) || status === 'active') throw new Error(`invalid retire status "${status}"`);
+  if (!ids?.length) return 0;
+  const now = new Date().toISOString();
+  const stmt = db.prepare("UPDATE memories SET status = ?, valid_until = ?, updated_at = ? WHERE id = ? AND status = 'active'");
+  let n = 0;
+  for (const id of ids) n += stmt.run(status, now, now, id).changes;
+  return n;
 }
 
 // Controlled vocabulary — one memories table, types as tags (NOT 16 schemas; see docs/ROADMAP.md).
@@ -493,9 +532,9 @@ export function saveMemory(db, mem, embedding) {
   if (twin) {
     db.prepare(`UPDATE memories SET content = ?, confidence = ?, entities = COALESCE(?, entities),
       source_session = COALESCE(?, source_session), source_messages = COALESCE(?, source_messages),
-      embedding = COALESCE(?, embedding), private = ?, updated_at = ? WHERE id = ?`)
+      sources = COALESCE(?, sources), embedding = COALESCE(?, embedding), private = ?, updated_at = ? WHERE id = ?`)
       .run(mem.content, mem.confidence ?? 0.8, jsonOrNull(mem.entities), mem.source_session ?? null,
-        jsonOrNull(mem.source_messages), blob, mem.private ? 1 : 0, now, twin.id);
+        jsonOrNull(mem.source_messages), jsonOrNull(mem.sources), blob, mem.private ? 1 : 0, now, twin.id);
     // refresh = re-extract: clear this memory's mentions first so repeated refreshes never
     // pile up duplicate mention rows (twin.title is the stored title — the UPDATE keeps it).
     db.prepare('DELETE FROM entity_mentions WHERE memory_id = ?').run(twin.id);
@@ -506,11 +545,11 @@ export function saveMemory(db, mem, embedding) {
   // 2. insert (optionally retiring an explicit predecessor)
   const info = db.prepare(`INSERT INTO memories
     (type, project, title, content, confidence, status, valid_from, valid_until, supersedes,
-     source_session, source_messages, entities, embedding, private, created_at, updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+     source_session, source_messages, sources, entities, embedding, private, created_at, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(mem.type, project, mem.title, mem.content, mem.confidence ?? 0.8, mem.status ?? 'active',
       mem.valid_from ?? now, mem.valid_until ?? null, mem.supersedes ?? null,
-      mem.source_session ?? null, jsonOrNull(mem.source_messages), jsonOrNull(mem.entities), blob,
+      mem.source_session ?? null, jsonOrNull(mem.source_messages), jsonOrNull(mem.sources), jsonOrNull(mem.entities), blob,
       mem.private ? 1 : 0, now, now);
   const id = Number(info.lastInsertRowid);
   linkEntities(db, { memoryId: id, project, ts: now, text: `${mem.title}\n${mem.content}` });

@@ -9,6 +9,7 @@ switch (cmd) {
   case 'ingest':       await import('./ingest.mjs'); break;             // index opted-in transcripts
   case 'import':       await import('./import.mjs'); break;             // backfill existing transcripts
   case 'onboard':      await (await import('./onboard.mjs')).main(); break; // guided: pick projects → import → distill → team sync
+  case 'consolidate':  await (await import('./consolidate.mjs')).main(); break; // judge near-duplicate memories: merge/supersede/close todos
   case 'forget':       await import('./forget.mjs'); break;             // remove sessions from the index
   case 'relabel':      await import('./relabel.mjs'); break;            // re-derive project names by git repo (no re-embed)
   case 'stats':        process.argv.push('--stats'); await import('./ingest.mjs'); break;
@@ -53,6 +54,9 @@ Usage: brain-rag <command>
                   on repos with no brain data)
   distill         Extract durable memories from indexed sessions via headless claude — costs tokens
                   [--project X] [--session <transcript>] [--limit N] [--model M] [--concurrency N] [--dry] [--hook]
+  consolidate     Judge near-duplicate memories of a project with headless claude: merge, supersede,
+                  close resolved TODOs, or keep — nothing is deleted, losers retire to 'superseded'. Costs tokens
+                  --project X | --all-projects [--dry] [--review] [--model M] [--concurrency N] [--limit N] [--sim T] [--lex T]
   always          Standing opt-in: always keep sessions of a repo — add [path] | remove [path] | list
   never           Standing opt-OUT: never keep sessions of a repo — add [path] | remove [path] | list
   default         Capture-by-default (opt-out mode): on | off | status — keep EVERY session unless in never.list

@@ -145,11 +145,14 @@ export function hasClaude() {
 // (an alias like 'sonnet' or a full id); undefined = the user's default model. 5-min timeout: a
 // wedged extraction must not pin a background hook — or a whole onboarding batch — forever.
 const execFileP = promisify(execFile);
-async function runClaude(prompt, { model } = {}) {
+export async function runClaude(prompt, { model } = {}) {
   const args = ['-p', prompt, '--output-format', 'json'];
   if (model) args.push('--model', model);
+  // CLAUDECODE is set inside a Claude Code session (hooks, nested runs) and makes the CLI refuse
+  // to start; the extraction is an independent headless call, so drop it for the child.
+  const env = { ...process.env }; delete env.CLAUDECODE;
   const { stdout } = await execFileP('claude', args,
-    { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 300000 });
+    { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 300000, env });
   return stdout;
 }
 

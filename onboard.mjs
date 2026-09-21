@@ -15,10 +15,12 @@
 //   brain-rag onboard --concurrency N            # parallel extractions (default 3)
 //   brain-rag onboard --model M                  # extraction model (default: sonnet)
 //   brain-rag onboard --no-sync                  # keep memories local even if `cloud login` ran
+//   brain-rag onboard --consolidate              # after distilling, judge near-duplicates (consolidate.mjs)
 //
 // Steps: discover → select → plan (+cost) → confirm → import (keep.list + ingest) → distill
-// (concurrent, resumable, newest first) → team sync → report. Every step is idempotent, so a
-// rerun picks up where an interrupted run stopped.
+// (concurrent, resumable, newest first) → [consolidate] → team sync → report. Every step is
+// idempotent, so a rerun picks up where an interrupted run stopped. Consolidation runs BEFORE
+// the sync on purpose: the team receives the cleaned set, not the raw one.
 //
 // Importing runs nothing (tests import the pure helpers); main() runs via cli.mjs.
 import { readFileSync, existsSync, appendFileSync, mkdirSync, statSync } from 'node:fs';
@@ -66,11 +68,13 @@ export function resolveSelection(input, groups) {
 }
 
 // Rough per-session token profile of one headless extraction: the digest is capped at 12k chars
-// (~3.5k tokens) + the prompt scaffold, and the output is a small JSON array. Prices are the
-// first-party API rates per 1M tokens (input, output) for the aliases `claude -p` accepts; an
-// unknown model is priced like sonnet. This is an ESTIMATE shown before spending — a Claude Code
-// subscription draws from the plan instead of billing per token, so it is an upper bound there.
-export const EST_TOKENS = { input: 4500, output: 1000 };
+// (~3.5k tokens) + the prompt scaffold (~1k) + the Claude Code CLI's own system prompt that every
+// `claude -p` call carries (~14k, measured 2026-09-21), and the output is a small JSON array.
+// Prices are the first-party API rates per 1M tokens (input, output) for the aliases `claude -p`
+// accepts; an unknown model is priced like sonnet. This is an ESTIMATE shown before spending — a
+// Claude Code subscription draws from the plan instead of billing per token, so it is an upper
+// bound there.
+export const EST_TOKENS = { input: 19000, output: 1000 };
 const PRICES = {
   haiku: [1, 5],
   sonnet: [2, 10],
@@ -116,6 +120,7 @@ export async function main() {
   const YES = has('--yes');
   const ALL = has('--all');
   const NO_SYNC = has('--no-sync');
+  const CONSOLIDATE = has('--consolidate');
   const projectsArg = val('--projects', null);
   const limit = Number(val('--limit', Infinity));
   const concurrency = Number(val('--concurrency', 3));
@@ -175,6 +180,7 @@ export async function main() {
   console.log(`  import   ${plan.toKeep.length} transcript(s) to index (${plan.selected.length - plan.toKeep.length} already opted in)`);
   console.log(`  distill  ${plan.toDistill.length} session(s) via headless 'claude -p --model ${model}', ${concurrency} in parallel${plan.beyondLimit ? ` (${plan.beyondLimit} more beyond --limit ${limit})` : ''}`);
   console.log(`           ≈ ${fmtUsd(cost.total)} at API rates (${fmtUsd(cost.perSession)}/session, priced as ${cost.priced_as}; a Claude Code subscription draws from your plan instead)`);
+  if (CONSOLIDATE) console.log(`  consolidate  judge near-duplicate memories per project before syncing (one 'claude -p' per candidate cluster)`);
   if (cloud) console.log(`  sync     memories → team store at ${cloud.endpoint}${cloud.auto === false ? ' (auto-sync is OFF — run `brain-rag cloud sync` afterwards)' : ''}`);
   else if (NO_SYNC) console.log('  sync     skipped (--no-sync): memories stay local');
   else console.log("  sync     not connected — memories stay local. Later: 'brain-rag cloud login' then 'brain-rag cloud sync'");
@@ -227,6 +233,26 @@ export async function main() {
     console.log('\n▸ nothing left to distill for the selected projects.');
   }
 
+  // 5b. Consolidate (opt-in) — judge near-duplicates in the projects we just fed, BEFORE the sync
+  // so the team receives the cleaned set. Project names come from the DB rows (the authority),
+  // not from the discovery labels.
+  let consolidated = null;
+  if (CONSOLIDATE) {
+    const { consolidateProject, describeVerdict } = await import('./consolidate.mjs');
+    const dbProjects = [...new Set(db.prepare(`SELECT DISTINCT project FROM sessions WHERE path IN (${[...paths].map(() => '?').join(',') || 'NULL'})`)
+      .all(...paths).map(r => r.project))];
+    consolidated = { clusters: 0, applied: 0, retired: 0, skipped: 0, failed: 0 };
+    for (const p of dbProjects) {
+      const t = await consolidateProject(db, p, {
+        model, concurrency,
+        onCluster: (c, v, res) => console.log(`  ${p} · cluster ${c.key} → ${res?.error ? `✗ ${res.error}` : describeVerdict(v)}${res?.skipped ? ' (skipped)' : ''}`),
+      });
+      if (t.clusters) console.log(`▸ consolidate ${p}: ${t.clusters} cluster(s) judged, ${t.applied} applied, ${t.retired} retired`);
+      for (const k of Object.keys(consolidated)) consolidated[k] += t[k] ?? 0;
+    }
+    if (!consolidated.clusters) console.log('\n▸ consolidate: no near-duplicate clusters found.');
+  }
+
   // 6. Sync — same best-effort contract as the SessionEnd hook.
   let team = null;
   if (cloud) {
@@ -238,8 +264,9 @@ export async function main() {
   }
 
   // 7. Report.
-  console.log(`\n✔ onboard: ${plan.toKeep.length} imported · ${totals.done} distilled (${totals.failed} failed) · ${totals.memories} memories${team?.pushed ? ` · ${team.pushed} synced` : ''}`);
+  console.log(`\n✔ onboard: ${plan.toKeep.length} imported · ${totals.done} distilled (${totals.failed} failed) · ${totals.memories} memories${consolidated ? ` · ${consolidated.retired} consolidated away` : ''}${team?.pushed ? ` · ${team.pushed} synced` : ''}`);
   if (plan.beyondLimit) console.log(`  ${plan.beyondLimit} older session(s) not distilled yet — rerun 'brain-rag onboard' to continue.`);
   if (totals.failed) console.log('  failed sessions are retried on the next run (they produced no memories).');
+  if (!consolidated && totals.memories) console.log("  bulk distillation leaves near-duplicates — 'brain-rag consolidate --project <name> --dry' shows them; --consolidate does it inline next time.");
   console.log("  keep it growing: 'brain-rag always add' inside each team repo keeps every future session there.");
 }
