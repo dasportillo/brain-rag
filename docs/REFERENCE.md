@@ -10,6 +10,7 @@ Operational reference moved out of the product README. The conceptual deep dive 
 npx -y brain-rag <command>
 
   install         Register the MCP server (Claude Code + Codex) + /brain, /state, /distill; print hook wiring
+                  (also forces a refresh of the generated prompt files — see "Keeping /distill current")
   uninstall       Reverse of install (--purge also deletes the index + state notes)
   serve           Run the MCP server (stdio) — what 'claude mcp add' / 'codex mcp add' launches
   ingest          Index opted-in transcripts (incremental)
@@ -34,7 +35,7 @@ npx -y brain-rag <command>
 | `search_context(query, project?, k?, since?, role?, layer?)` | Hybrid search over the whole history. `role`: `summary` (compaction recaps) / `actions` (commands & files) / `user` / `assistant`. `layer`: `both` (default) / `memories` / `raw`. |
 | `get_state(project?)` | Curated "where I am today" note; falls back to recent activity (marked NOT curated). |
 | `save_state(content, project?)` | Write/overwrite the curated state note. |
-| `save_memories(memories[])` | Write distilled Layer-2 memories (typed, self-contained, with provenance). Same title refreshes; `supersedes:<id>` retires the predecessor; similar existing memories are warned, never auto-retired. |
+| `save_memories(memories[])` | Write distilled Layer-2 memories (typed, one claim each, with provenance). Same title refreshes; `supersedes:<id>` retires the predecessor; similar existing memories are warned, never auto-retired. |
 | `keep_session()` | Opt THIS session into indexing (works from Claude Code and Codex). |
 | `list_projects()` | Indexed projects with counts and freshness. |
 
@@ -80,6 +81,48 @@ An absent or malformed file means identity (zero behavior change). Don't merge p
 sessions are actually off-topic — that re-introduces the cross-project contamination the search
 de-dup removed.
 
+## Keeping `/distill` current
+
+`distill-prompt.mjs` is the single source of truth for the extraction prompt, but only ONE of its
+three runners imports it at runtime (the headless extractor). The other two are **files** that
+`install` writes: `~/.claude/commands/distill.md` and `~/.codex/prompts/distill.md`. Left alone,
+those files keep extracting with the rules of whatever version installed them — which is how an
+upgraded package can still fill the brain in the old, dense format.
+
+Every generated file therefore ends with a stamp:
+
+```
+<!-- brain-rag:prompt 3f9a1c0b7e42 — generated file, refreshed automatically on upgrade; … -->
+```
+
+The hash covers the body above it, which separates three cases without any external bookkeeping:
+the file is **current** (skipped by both install and the background refresh — there is nothing to
+do), it is **stale** (Brain-RAG wrote it, the package has moved on), or it is **edited** (the body
+no longer hashes to the stamp, so it belongs to the user now). A file with no stamp at all is
+**legacy**: written before stamping existed, refreshed like a stale one, with the old text kept
+next to it as `<file>.bak`.
+
+The background refresh only runs from an INSTALLED copy. If your MCP server points at a git
+checkout of this repo, it is skipped on purpose — otherwise your global `/distill` would be
+rewritten from whatever branch happens to be checked out. Run `install` there instead.
+
+Stale files are rewritten by the two entry points that already run on every session — `serve` (the
+MCP server, registered by `install` in both hosts) and `mark-keep` (the SessionStart hook). Both
+run through `npx -y brain-rag`, which is the point: an npm `postinstall` would never fire on the
+`npx` path this package is built around. The refresh is idempotent, reads six small files, logs to
+stderr only, and swallows every error — it can never stop a session from starting.
+
+| State | `serve` / hook | `brain-rag install` |
+|---|---|---|
+| current | nothing | rewritten identically |
+| stale (ours) | rewritten, one stderr line | rewritten |
+| unstamped, older content | rewritten, previous text kept as `.bak` | same |
+| edited by you | **left alone**, one stderr line | overwritten, your version kept as `.bak` |
+| missing | **not created** | created |
+
+What this cannot cover: a machine where neither the MCP server nor the hook ever runs. There,
+`brain-rag install` after upgrading is the only repair, and `install` says so in its output.
+
 ## Evaluation
 
 `node eval.mjs 8` runs the labeled known-item eval (prefers your gitignored
@@ -108,3 +151,4 @@ hit-rule when relevance is subtler than a pattern match.
 | `server.mjs` | the MCP server |
 | `eval.mjs` + `eval-metrics.mjs` | recall eval harness + pure metric layer |
 | `install.mjs` / `uninstall.mjs` | wiring for Claude Code + Codex |
+| `distill-prompt.mjs` / `prompts.mjs` | the extraction prompt (single source of truth) / the generated prompt files + their self-refresh |

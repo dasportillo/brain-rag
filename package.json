@@ -30,6 +30,7 @@
     "context.mjs",
     "distill.mjs",
     "distill-prompt.mjs",
+    "prompts.mjs",
     "always.mjs",
     "never.mjs",
     "config.mjs",

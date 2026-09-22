@@ -3,12 +3,13 @@
 // index + state notes) lives under BRAIN_DIR (~/.claude/brain).
 // Run with: npx -y <pkg> install  (or `brain-rag install`).
 import { execSync } from 'node:child_process';
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-// The extraction prompt lives in distill-prompt.mjs (single source of truth — the /distill slash
-// command, the Codex custom prompt and the headless batch extractor must never drift apart).
-import { DISTILL_PROMPT } from './distill-prompt.mjs';
+// The prompt FILES live in prompts.mjs (single source of truth — install writes them, and the
+// same module refreshes them from `serve` / the SessionStart hook when a later version changes
+// them, so /distill can never keep running last year's rules).
+import { syncPrompts } from './prompts.mjs';
 
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
 const NAME = pkg.name;                 // e.g. brain-rag
@@ -48,23 +49,8 @@ if (existsSync(CODEX_HOME)) {
     console.log(`▸ 'codex' CLI not found — register manually in ~/.codex/config.toml:\n    [mcp_servers.brain]\n    command = "npx"\n    args = ["-y", "${NAME}", "serve"]`);
   }
 
-  // Custom prompts = Codex's slash commands. MCP-tool-first (the server runs unsandboxed,
-  // so no shell escalation prompts inside the Codex sandbox).
-  const PROMPTS = join(CODEX_HOME, 'prompts');
-  mkdirSync(PROMPTS, { recursive: true });
-  writeFileSync(join(PROMPTS, 'brain.md'), `Call the \`keep_session\` tool from the \`brain\` MCP server and report its one-line result verbatim. Do nothing else.
-(The brain is OFF by default; this opts THIS session in so it does get indexed, in full.)
-`);
-  writeFileSync(join(PROMPTS, 'state.md'), `Build and persist the curated CURRENT-STATE note for the project \`$ARGUMENTS\` (if empty, infer it from the current working directory), using the \`brain\` MCP server.
-
-1. Call \`get_state\` for that project — it returns the curated note, or recent activity when none exists. If it finds nothing, call \`list_projects\` and retry with the exact name.
-2. Synthesize a concise note: **Now**, **In flight**, **Decisions**, **Blockers**, **Next**. Omit anything reverted or superseded.
-3. Call \`save_state\` with that Markdown (same project if one was given).
-4. Report the saved path on a single line.
-`);
-  writeFileSync(join(PROMPTS, 'distill.md'), DISTILL_PROMPT);
-  console.log(`▸ installed Codex /brain, /state and /distill prompts → ${PROMPTS}`);
-
+  // Custom prompts = Codex's slash commands, written below by syncPrompts (MCP-tool-first: the
+  // server runs unsandboxed, so no shell escalation prompts inside the Codex sandbox).
   console.log(`
 ▸ Codex tip — Codex doesn't surface MCP instructions as prominently as Claude Code; add a short
   section to ~/.codex/AGENTS.md so the model uses the brain proactively, e.g.:
@@ -79,34 +65,18 @@ if (existsSync(CODEX_HOME)) {
   (the Claude Code SessionEnd hook, or run '${NPX} ingest' manually / on a schedule).`);
 }
 
-// 2. Slash commands — generated so they always point at THIS package (rename-safe).
-mkdirSync(CMD_DIR, { recursive: true });
-writeFileSync(join(CMD_DIR, 'brain.md'), `---
-description: Save THIS conversation to the "second brain" (off by default — nothing is saved)
-allowed-tools: Bash(npx:*)
----
-Run exactly this command with the Bash tool and report its output on a single line:
-
-\`${NPX} mark-current\`
-
-Do nothing else. (The brain is OFF by default; this opts THIS session in so it does get indexed, in full.)
-`);
-writeFileSync(join(CMD_DIR, 'state.md'), `---
-description: Synthesize and save the curated current-state note for a project (state/<project>.md)
-allowed-tools: Bash(npx:*), mcp__brain__save_state
----
-Build and persist the curated CURRENT-STATE note for the project \`$ARGUMENTS\` (if empty, infer it from the current working directory).
-
-1. Run \`${NPX} state $ARGUMENTS\` to gather the project's recent activity. (No argument: run \`${NPX} state --list\` first and pick the project matching the cwd.)
-2. Synthesize a concise note: **Now**, **In flight**, **Decisions**, **Blockers**, **Next**. Omit anything reverted or superseded.
-3. Call the \`save_state\` tool with that Markdown (same project if one was given).
-4. Report the saved path on a single line.
-`);
-writeFileSync(join(CMD_DIR, 'distill.md'), `---
-description: Distill THIS conversation into durable memories (Layer 2 of the second brain)
----
-${DISTILL_PROMPT}`);
+// 2. Slash commands + Codex prompts — generated from prompts.mjs so they always point at THIS
+// package (rename-safe) and always carry the CURRENT extraction rules. Each file is stamped with
+// a hash of what we wrote, which is what lets `serve` and the SessionStart hook refresh it later
+// without ever clobbering a file you made your own (that one is backed up and reported).
+const synced = syncPrompts({ mode: 'install' });
+for (const p of synced.backedUp) console.log(`▸ your previous version was kept at ${p}`);
 console.log(`▸ installed /brain, /state and /distill → ${CMD_DIR}`);
+if (existsSync(CODEX_HOME)) console.log(`▸ installed Codex /brain, /state and /distill prompts → ${join(CODEX_HOME, 'prompts')}`);
+console.log(`▸ these files are refreshed automatically on upgrade — by the MCP server and by the
+  SessionStart hook, both of which run through '${NPX}'. If you use NEITHER (no 'brain' MCP server
+  registered and no mark-keep hook), re-run '${NPX} install' after upgrading or /distill will keep
+  extracting with the rules of the version that wrote it.`);
 
 // 3. Hook wiring (printed — we don't edit settings.json for you). The brain is OPT-IN.
 console.log(`

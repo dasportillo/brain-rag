@@ -65,7 +65,7 @@ Brain-RAG turns that archive into **long-term memory your agents actually use** 
 | | |
 |---|---|
 | 🧠 **Remembers decisions — and the *why*** | Ask *"why did we drop Redis?"* and get the actual reasoning from the actual conversation, with dates and sources. |
-| 📌 **Distilled memories, not just chat logs** | `/distill` turns a working session into typed, self-contained knowledge: decisions, bug root causes, solutions, lessons. Each memory keeps a link back to the exact conversation that produced it. |
+| 📌 **Distilled memories, not just chat logs** | `/distill` turns a working session into typed knowledge: decisions, bug root causes, solutions, lessons. One claim per memory, the conclusion first, so a person opening it reads an answer and not a paragraph. Each memory keeps a link back to the exact conversation that produced it. |
 | 🕰️ **Knows what's current vs outdated** | Knowledge changes. When newer information supersedes older, your agent sees it flagged — it won't resurrect a plan you reverted two weeks ago. |
 | 📍 **"Where did I leave off?"** | A curated per-project state note — what's in flight, what's decided, what's blocked, what's next — ready the moment you ask. |
 | 🔀 **One memory, all your agents** | Claude Code and Codex share the same brain out of the box. Any MCP-compatible agent (Cursor, Windsurf, VS Code) can connect. Your memory belongs to **you**, not to a vendor. |
@@ -100,6 +100,21 @@ npx -y brain-rag install
 ```
 
 That's it. The installer registers the memory server with **Claude Code** and **Codex** (if present), installs the `/brain`, `/state` and `/distill` commands in both, and prints the optional automation hooks.
+
+<details>
+<summary><b>Upgrading — the slash commands keep themselves current</b></summary>
+
+`/distill` is a **file** on disk (`~/.claude/commands/distill.md`, `~/.codex/prompts/distill.md`), written at install time. The extraction rules inside it change between versions, so a file left from an older install would keep filling your brain in the old format long after you upgraded.
+
+It repairs itself. Every generated file is stamped with a hash of what Brain-RAG wrote, and the two things that already run on every session — the MCP server and the `mark-keep` SessionStart hook, both launched through `npx -y brain-rag` — rewrite any file the package has moved past. Nothing to remember, and it works under `npx` (an npm `postinstall` would not: `npx` never runs one).
+
+Two cases it deliberately will not handle silently:
+
+- **You edited the file.** The stamp no longer matches, so it is yours: Brain-RAG leaves it alone and prints one line saying it may be missing newer rules. `npx -y brain-rag install` forces the update and keeps your version as `distill.md.bak`.
+- **You use neither the MCP server nor the hook.** Then nothing of Brain-RAG runs on its own and nothing can refresh anything — re-run `npx -y brain-rag install` after upgrading.
+
+A file written by a version older than this mechanism is replaced on first run, with the previous text kept as `.bak`.
+</details>
 
 <details>
 <summary><b>Other MCP agents (Cursor, Windsurf, VS Code, …)</b></summary>
@@ -280,6 +295,7 @@ Brain-RAG is evolving from *searchable history* into a full **long-term memory s
 - ✅ Layer 2: distilled, typed memories with provenance and temporal lifecycle
 - ✅ Multi-agent: Claude Code + Codex sharing one brain
 - ✅ Team ramp-up: `brain-rag onboard` turns a developer's existing history into team memory; `brain-rag consolidate` judges the near-duplicates bulk distillation leaves behind (merge / supersede / close resolved TODOs — nothing deleted)
+- ✅ Memories written for a reader: one claim each, the conclusion first, a title that is a claim and not a summary — every new memory is distilled to that shape, by `/distill` and by the headless extractor alike
 - 🔜 Automatic distillation at session end — knowledge extraction with zero manual steps
 - 🔜 `get_context`: a ready-made project briefing (state + decisions + open TODOs + conflicts) injected when a session starts
 - 🔜 Entity graph (services ↔ databases ↔ projects) complementing search
