@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { isAlwaysKept, readAlwaysList } from './always.mjs';
 import { isNeverKept, readNeverList } from './never.mjs';
 import { captureByDefault } from './config.mjs';
+import { refreshQuietly } from './prompts.mjs';
 
 // PURE policy: { keep, reason } from the four inputs. No I/O — tests import this directly (the
 // script's side effects run only when mark-keep.mjs is executed directly, see the guard below).
@@ -27,6 +28,14 @@ export function decideKeep({ cwd, env, always = [], never = [], defaultOn = fals
 }
 
 export function main() {
+  // Upgrade repair, first and unconditional (it is not about THIS session being kept): the
+  // /distill slash command and the Codex prompt are FILES written once by install, so a package
+  // upgrade never reaches them and /distill keeps extracting with the old rules. This is one of
+  // the two places that run on every session through `npx -y brain-rag`, so it is where they get
+  // brought up to date. It only writes when a file is provably out of date, and it can neither
+  // throw nor change this hook's exit code — a prompt file is never worth failing a session start.
+  refreshQuietly();
+
   // The hook payload's cwd decides the never/always/default triggers even without BRAIN.
   let data = {};
   try { data = JSON.parse(readFileSync(0, 'utf8') || '{}'); } catch { /* empty stdin */ }

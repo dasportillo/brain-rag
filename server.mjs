@@ -13,6 +13,13 @@ import { buildContext } from './context.mjs';
 import { gitRootName, findCurrentTranscript } from './transcripts.mjs';
 import { embedOne, embed } from './embed.mjs';
 import { autoSync } from './cloud.mjs';
+import { refreshQuietly } from './prompts.mjs';
+
+// The other half of the upgrade repair (see mark-keep.mjs): install registers THIS server in both
+// hosts, so it starts on every session that uses the brain — including under npx, where a package
+// `postinstall` would never run. Stamped prompt files that the package has moved past are rewritten
+// here. stdout is the MCP channel, so refreshQuietly logs to stderr, and it never throws.
+refreshQuietly();
 
 const db = openDb();
 

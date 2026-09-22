@@ -30,13 +30,15 @@ try {
   console.log("▸ Codex MCP 'brain' not registered (or 'codex' CLI unavailable) — nothing to remove");
 }
 
-// 2. Remove the slash commands / custom prompts we installed.
+// 2. Remove the slash commands / custom prompts we installed. A `<file>.bak` left by a prompt
+// refresh is NOT removed: that copy exists because the text was yours, not ours.
 for (const p of [
   join(CMD_DIR, 'brain.md'), join(CMD_DIR, 'state.md'), join(CMD_DIR, 'distill.md'),
   join(homedir(), '.codex', 'prompts', 'brain.md'), join(homedir(), '.codex', 'prompts', 'state.md'),
   join(homedir(), '.codex', 'prompts', 'distill.md'),
 ]) {
   if (existsSync(p)) { rmSync(p); console.log(`▸ removed ${p}`); }
+  if (existsSync(p + '.bak')) console.log(`▸ kept your ${p}.bak (delete it yourself if you don't want it)`);
 }
 
 // 3. Data dir — opt-in destructive.
