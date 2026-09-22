@@ -10,6 +10,7 @@ switch (cmd) {
   case 'import':       await import('./import.mjs'); break;             // backfill existing transcripts
   case 'onboard':      await (await import('./onboard.mjs')).main(); break; // guided: pick projects → import → distill → team sync
   case 'consolidate':  await (await import('./consolidate.mjs')).main(); break; // judge near-duplicate memories: merge/supersede/close todos
+  case 'retitle':      await (await import('./retitle.mjs')).main(); break;     // shorten over-long titles left by the pre-one-claim rules
   case 'forget':       await import('./forget.mjs'); break;             // remove sessions from the index
   case 'relabel':      await import('./relabel.mjs'); break;            // re-derive project names by git repo (no re-embed)
   case 'stats':        process.argv.push('--stats'); await import('./ingest.mjs'); break;
@@ -57,6 +58,9 @@ Usage: brain-rag <command>
   consolidate     Judge near-duplicate memories of a project with headless claude: merge, supersede,
                   close resolved TODOs, or keep — nothing is deleted, losers retire to 'superseded'. Costs tokens
                   --project X | --all-projects [--dry] [--review] [--model M] [--concurrency N] [--limit N] [--sim T] [--lex T]
+  retitle         Shorten over-long titles of memories distilled before the one-claim rules. Only titles:
+                  an UPDATE by id, no rows created, nothing split. Costs tokens
+                  [--project X] [--over 90] [--limit N] [--batch 20] [--model M] [--dry] [--yes]
   always          Standing opt-in: always keep sessions of a repo — add [path] | remove [path] | list
   never           Standing opt-OUT: never keep sessions of a repo — add [path] | remove [path] | list
   default         Capture-by-default (opt-out mode): on | off | status — keep EVERY session unless in never.list
