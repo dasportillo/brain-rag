@@ -197,7 +197,9 @@ const BIN = (process.env.BRAIN_RAG_BIN || 'npx -y ${name}@${version}').trim().sp
 const BRAIN_DIR = process.env.BRAIN_DIR || join(homedir(), '.claude', 'brain');
 const dirs = new Map(); // session id -> directory, from session.created (session.idle carries only the id)
 // Windows: npx is a .cmd shim, which cannot be spawned without a shell — go through cmd.exe with
-// every argument quoted, and hide the console window each spawn would otherwise flash.
+// every argument quoted. And NOT detached there: a detached process gets a console of its own, which
+// windowsHide does not hide (a window popped up on every session event). On Windows a child outlives
+// its parent anyway, so detached buys nothing; it shares opencode's console, hidden.
 const WIN = process.platform === 'win32';
 const q = (a) => (/^[\\w.:\\\\/=+@-]+$/.test(String(a)) ? String(a) : '"' + String(a).replace(/"/g, '') + '"');
 
@@ -206,7 +208,7 @@ function run(...args) {
     mkdirSync(BRAIN_DIR, { recursive: true });
     const out = openSync(join(BRAIN_DIR, 'opencode.log'), 'a');
     const argv = [...BIN.slice(1), 'opencode', ...args];
-    const opts = { detached: true, stdio: ['ignore', out, out], windowsHide: true };
+    const opts = { detached: !WIN, stdio: ['ignore', out, out], windowsHide: true };
     const child = WIN ? spawn([BIN[0], ...argv].map(q).join(' '), [], { ...opts, shell: true }) : spawn(BIN[0], argv, opts);
     child.on('error', () => {}); // a missing binary must not surface as an unhandled error inside opencode
     child.unref();

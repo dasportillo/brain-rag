@@ -112,7 +112,7 @@ export function start(sessionId, directory, {
 // "pending", and the running one loops once more — the session that went idle meanwhile is picked
 // up without two processes embedding the same chunks into the same SQLite file.
 function pidAlive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } }
-export function ingestLocked({ dir = STATE_DIR, run = () => execFileSync(process.execPath, [join(HERE, 'ingest.mjs')], { stdio: 'inherit' }) } = {}) {
+export function ingestLocked({ dir = STATE_DIR, run = () => execFileSync(process.execPath, [join(HERE, 'ingest.mjs')], { stdio: 'inherit', windowsHide: true }) } = {}) {
   mkdirSync(dir, { recursive: true });
   const lock = join(dir, 'ingest.lock'), pending = join(dir, 'ingest.pending');
   try {
