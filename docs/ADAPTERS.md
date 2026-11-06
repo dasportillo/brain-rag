@@ -34,7 +34,7 @@ registerAdapter({
   // Optional — only for a store that is NOT one .jsonl file per session (see the opencode adapter):
   list(root)   { /* every session path in the store (default: walk root for .jsonl) */ },
   stat(path)   { /* { mtimeMs, size } (default: fs.statSync) */ },
-  exists(path) { /* still in the store? (default: fs.existsSync) — ingest prunes the rest */ },
+  exists(path) { /* still in the store? (default: fs.existsSync) — gone ones stay indexed as "archived" */ },
   cwdOf(path)  { /* cwd without a full parse (default: read it from the file head) */ },
 });
 ```
