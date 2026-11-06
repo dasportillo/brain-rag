@@ -35,6 +35,7 @@ export function runningFromCheckout(dir = dirname(fileURLToPath(import.meta.url)
 
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
 export const PKG_NAME = pkg.name;
+export const PKG_VERSION = pkg.version;
 
 // ---------------------------------------------------------------------------
 // The stamp
@@ -179,7 +180,10 @@ ${DISTILL_PROMPT}`;
 // SPAWNS `brain-rag opencode …` detached (see opencode-hook.mjs) — `opencode run` exits as soon
 // as a session goes idle, so nothing slow may live in-process, and a plugin that throws would
 // break opencode itself, so every path is wrapped.
-export function opencodePluginBody(name = PKG_NAME) {
+// The package is pinned to THIS version: a bare `npx -y brain-rag` keeps reusing whatever npx
+// cached first (a broken 1.7.0 survived upgrades that way on Windows, issue #52). Each upgrade
+// rewrites the plugin (its stamp changes with the version), and the pin moves with it.
+export function opencodePluginBody(name = PKG_NAME, version = PKG_VERSION) {
   return `// brain-rag for opencode — keeps opted-in sessions and indexes + distills them automatically,
 // like the Claude Code hooks do. Policy: BRAIN=1/0 > never.list > always.list > \`brain-rag default\`.
 // Logs: <BRAIN_DIR>/opencode.log. Auto-distill toggle: \`brain-rag opencode distill on|off\`.
@@ -189,15 +193,23 @@ import { openSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
-const BIN = (process.env.BRAIN_RAG_BIN || 'npx -y ${name}').trim().split(/\\s+/);
+const BIN = (process.env.BRAIN_RAG_BIN || 'npx -y ${name}@${version}').trim().split(/\\s+/);
 const BRAIN_DIR = process.env.BRAIN_DIR || join(homedir(), '.claude', 'brain');
 const dirs = new Map(); // session id -> directory, from session.created (session.idle carries only the id)
+// Windows: npx is a .cmd shim, which cannot be spawned without a shell — go through cmd.exe with
+// every argument quoted, and hide the console window each spawn would otherwise flash.
+const WIN = process.platform === 'win32';
+const q = (a) => (/^[\\w.:\\\\/=+@-]+$/.test(String(a)) ? String(a) : '"' + String(a).replace(/"/g, '') + '"');
 
 function run(...args) {
   try {
     mkdirSync(BRAIN_DIR, { recursive: true });
     const out = openSync(join(BRAIN_DIR, 'opencode.log'), 'a');
-    spawn(BIN[0], [...BIN.slice(1), 'opencode', ...args], { detached: true, stdio: ['ignore', out, out] }).unref();
+    const argv = [...BIN.slice(1), 'opencode', ...args];
+    const opts = { detached: true, stdio: ['ignore', out, out], windowsHide: true };
+    const child = WIN ? spawn([BIN[0], ...argv].map(q).join(' '), [], { ...opts, shell: true }) : spawn(BIN[0], argv, opts);
+    child.on('error', () => {}); // a missing binary must not surface as an unhandled error inside opencode
+    child.unref();
   } catch { /* the brain must never break opencode */ }
 }
 
