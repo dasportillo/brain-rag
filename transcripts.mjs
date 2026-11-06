@@ -105,20 +105,54 @@ function toolAction(block) {
   return d ? `${name}: ${d}` : name;
 }
 
+// The lines of a .jsonl transcript, read in fixed-size blocks — NEVER the whole file as one string.
+// Transcripts grow without bound (a long Claude Code session with big tool outputs measured 594 MB
+// on 2026-10-20), past V8's maximum string length (~512 MB): readFileSync(…, 'utf8') then throws
+// ERR_STRING_TOO_LONG and, before issue #45, took the whole ingest run down with it.
+// Lines are split on the raw '\n' byte, so a multi-byte UTF-8 character is never cut in half. A
+// single line longer than `maxLine` is skipped whole: at that size it is a dumped tool payload,
+// which no parser indexes anyway, and holding it would just move the crash one level down.
+export const MAX_LINE_BYTES = 64 * 1024 * 1024;
+export function* readLines(filePath, { blockSize = 4 * 1024 * 1024, maxLine = MAX_LINE_BYTES } = {}) {
+  const fd = openSync(filePath, 'r');
+  try {
+    const buf = Buffer.alloc(blockSize);
+    let parts = [], partLen = 0, skipping = false;
+    for (;;) {
+      const n = readSync(fd, buf, 0, blockSize, null);
+      if (n === 0) break;
+      let start = 0;
+      for (let nl = buf.indexOf(10, start); nl !== -1 && nl < n; nl = buf.indexOf(10, start)) {
+        if (!skipping) {
+          parts.push(buf.subarray(start, nl)); partLen += nl - start;
+          if (partLen <= maxLine) yield Buffer.concat(parts, partLen).toString('utf8');
+        }
+        parts = []; partLen = 0; skipping = false;
+        start = nl + 1;
+      }
+      if (start < n && !skipping) {
+        partLen += n - start;
+        if (partLen > maxLine) { parts = []; partLen = 0; skipping = true; } // drop the giant line, resync at the next '\n'
+        else parts.push(Buffer.from(buf.subarray(start, n))); // copy: buf is reused by the next read
+      }
+    }
+    if (partLen && !skipping) yield Buffer.concat(parts, partLen).toString('utf8'); // last line without '\n'
+  } finally { closeSync(fd); }
+}
+
 // Reads a transcript once and returns { turns, title }:
 //   turns  — user + assistant text; context-compaction summaries tagged role 'summary'; and one
 //            role 'actions' turn per session — a compact trace of tool calls (files/commands/searches).
 //   title  — the session's ai-title ("what this session was about"), or null.
 // Noise (command wrappers, harness reminders) and raw `thinking` blocks are dropped.
 export function parseTranscript(filePath) {
-  const content = readFileSync(filePath, 'utf8');
   const turns = [];
   let title = null;
   const actions = [];
   const seenAction = new Set();
   let lastTs = null, sessionId = null, cwd = null;
 
-  for (const line of content.split('\n')) {
+  for (const line of readLines(filePath)) {
     if (!line.trim()) continue;
     let obj;
     try { obj = JSON.parse(line); } catch { continue; }
@@ -229,13 +263,12 @@ export function sessionProject(filePath) {
 // Only response_item lines are read: event_msg lines duplicate them for the UI, and
 // role 'developer' items are harness config, not conversation.
 export function parseCodexRollout(filePath) {
-  const content = readFileSync(filePath, 'utf8');
   const turns = [];
   const actions = [];
   const seenAction = new Set();
   let cwd = null, sessionId = null, lastTs = null;
 
-  for (const line of content.split('\n')) {
+  for (const line of readLines(filePath)) {
     if (!line.trim()) continue;
     let obj;
     try { obj = JSON.parse(line); } catch { continue; }
