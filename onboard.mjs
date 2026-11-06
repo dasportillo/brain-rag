@@ -23,11 +23,11 @@
 // the sync on purpose: the team receives the cleaned set, not the raw one.
 //
 // Importing runs nothing (tests import the pure helpers); main() runs via cli.mjs.
-import { readFileSync, existsSync, appendFileSync, mkdirSync, statSync } from 'node:fs';
-import { join, basename } from 'node:path';
+import { readFileSync, existsSync, appendFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
-import { walkJsonl, ADAPTERS, sessionProject } from './transcripts.mjs';
+import { listSessions, sessionStat, sessionRefOf, ADAPTERS, sessionProject } from './transcripts.mjs';
 
 // ---------------------------------------------------------------------------
 // Pure helpers (unit-tested, dep-free)
@@ -36,7 +36,7 @@ import { walkJsonl, ADAPTERS, sessionProject } from './transcripts.mjs';
 // Group transcript paths by project label. `labelOf` is injectable (tests pass a map; the real
 // run reads each file's head). Sorted by session count, descending. Each group carries the newest
 // mtime seen (via `mtimeOf`) so the listing can show recency.
-export function groupByProject(files, { labelOf = sessionProject, mtimeOf = (f) => statSync(f).mtimeMs } = {}) {
+export function groupByProject(files, { labelOf = sessionProject, mtimeOf = (f) => sessionStat(f).mtimeMs } = {}) {
   const groups = new Map();
   for (const f of files) {
     const label = labelOf(f) || 'unknown';
@@ -92,10 +92,10 @@ export function estimateCost(sessions, model = 'sonnet') {
 //   toKeep     — selected transcripts not yet in keep.list (import will add them)
 //   toDistill  — selected transcripts that have not produced memories yet (capped by limit).
 //                Newest first so a partial run lands the CURRENT knowledge before the old.
-export function planRun(groups, { keep, done, mtimeOf = (f) => statSync(f).mtimeMs, limit = Infinity } = {}) {
+export function planRun(groups, { keep, done, mtimeOf = (f) => sessionStat(f).mtimeMs, limit = Infinity } = {}) {
   const selected = groups.flatMap(g => g.files);
   const toKeep = selected.filter(f => !keep.has(f));
-  const undistilled = selected.filter(f => !done.has(f) && !done.has(basename(f, '.jsonl')));
+  const undistilled = selected.filter(f => !done.has(f) && !done.has(sessionRefOf(f)));
   undistilled.sort((a, b) => mtimeOf(b) - mtimeOf(a));
   const toDistill = undistilled.slice(0, limit);
   return { selected, toKeep, toDistill, beyondLimit: undistilled.length - toDistill.length };
@@ -134,7 +134,7 @@ export async function main() {
   const KEEP = join(BRAIN_DIR, 'keep.list');
 
   // 1. Discover — every transcript of every host, grouped by project from the file head.
-  const files = ADAPTERS.flatMap(a => walkJsonl(a.root));
+  const files = listSessions();
   if (!files.length) {
     console.log(`onboard: no transcripts found under ${ADAPTERS.map(a => a.root).join(' or ')} — nothing to bring over.`);
     return;
@@ -224,7 +224,7 @@ export async function main() {
       concurrency, model,
       onResult: (r, res) => {
         n++;
-        const head = `[${n}/${rows.length}] ${r.project} · ${r.title ?? basename(r.path, '.jsonl')}`;
+        const head = `[${n}/${rows.length}] ${r.project} · ${r.title ?? sessionRefOf(r.path)}`;
         if (res.error) console.error(`  ✗ ${head} — ${res.error}`);
         else console.log(`  ${head}\n    ${formatDistillResult(res)}`);
       },

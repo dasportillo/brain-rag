@@ -16,13 +16,14 @@
 // Importing runs nothing (tests import the pure helpers below); main() runs via cli.mjs or the
 // self-exec guard at EOF (so `node distill.mjs --hook` works too, not only `brain-rag distill`).
 import { readFileSync, existsSync } from 'node:fs';
-import { join, basename, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { openDb, aliasMembers, saveMemory, MEMORY_TYPES, BRAIN_DIR } from './store.mjs';
 import { headlessDistillPrompt } from './distill-prompt.mjs';
 import { autoSync } from './cloud.mjs';
+import { sessionRefOf } from './transcripts.mjs';
 
 // ---------------------------------------------------------------------------
 // Pure helpers (unit-tested, dep-free)
@@ -127,14 +128,15 @@ export function parseMemoriesJson(text) {
 
 const KEEP_FILE = join(BRAIN_DIR, 'keep.list');
 // Provenance key for a session row: the session id when the transcript recorded one, else the
-// file's basename (they coincide for Claude transcripts, which are named <sessionId>.jsonl).
-const sessionRef = (row) => row.session ?? basename(row.path, '.jsonl');
+// file's basename (they coincide for Claude transcripts, which are named <sessionId>.jsonl; an
+// opencode virtual path <db>#<id> yields its id — see sessionRefOf).
+const sessionRef = (row) => row.session ?? sessionRefOf(row.path);
 // ALL keys this session's memories may be filed under (pure; exported for tests). The MCP server
 // records basename(transcript) as source_session — for Codex rollouts that's
 // "rollout-<ts>-<uuid>" while row.session is the bare uuid — so the already-distilled skip must
 // match EITHER key, or a Codex session distilled in-session via /distill wouldn't be recognized
 // and the batch would re-pay its tokens (and re-save near-duplicate memories).
-export const sessionRefs = (row) => [...new Set([row.session, basename(row.path, '.jsonl')])].filter(Boolean);
+export const sessionRefs = (row) => [...new Set([row.session, sessionRefOf(row.path)])].filter(Boolean);
 
 export function hasClaude() {
   try { execFileSync('claude', ['--version'], { stdio: 'ignore' }); return true; }

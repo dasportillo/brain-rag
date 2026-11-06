@@ -1,16 +1,16 @@
-// GLOBAL MCP server: exposes your second brain to Claude Code and Codex in any project.
+// GLOBAL MCP server: exposes your second brain to Claude Code, Codex and opencode in any project.
 // Register with:  claude mcp add brain --scope user -- npx -y brain-rag serve
 //            or:  codex mcp add brain -- npx -y brain-rag serve
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from 'node:fs';
-import { join, basename } from 'node:path';
+import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { openDb, searchChunks, listProjects, canonicalProject, recentActivity, wrapEvidence, BRAIN_DIR,
   saveMemory, searchMemories, entityLookup, MEMORY_TYPES, MEMORY_STATUSES } from './store.mjs';
 import { buildContext } from './context.mjs';
-import { gitRootName, findCurrentTranscript } from './transcripts.mjs';
+import { gitRootName, findCurrentTranscript, sessionRefOf } from './transcripts.mjs';
 import { embedOne, embed } from './embed.mjs';
 import { autoSync } from './cloud.mjs';
 import { refreshQuietly } from './prompts.mjs';
@@ -32,7 +32,7 @@ const server = new McpServer(
   {
     instructions: [
       "This server is the user's \"second brain\": persistent memory of all their work",
-      '(indexed history of Claude Code & Codex conversations + curated per-project state).',
+      '(indexed history of Claude Code, Codex & opencode conversations + curated per-project state).',
       '',
       'WHEN TO USE IT (proactively, even if not asked with these exact words):',
       '- FIRST thing to call when starting work in a known repo: get_context(project) — the assembled',
@@ -72,10 +72,11 @@ function currentProject() {
 }
 
 // Best-effort session id for memory provenance: the transcript being written right now is
-// named after the session (Claude: <sessionId>.jsonl · Codex: rollout-…-<id>.jsonl).
+// named after the session (Claude: <sessionId>.jsonl · Codex: rollout-…-<id>.jsonl · opencode:
+// <opencode.db>#<session id>).
 function currentSessionRef() {
   const t = findCurrentTranscript(process.cwd());
-  return t ? basename(t, '.jsonl') : null;
+  return t ? sessionRefOf(t) : null;
 }
 
 server.tool(
@@ -287,8 +288,9 @@ server.tool(
   'Marks THIS conversation to be saved into the brain (indexed when the session ends). The brain is OPT-IN — nothing is saved unless kept, so an un-kept chat is lost. USE IT PROACTIVELY, without being asked, when this conversation produced something worth remembering later: a decision, a solution/fix, a design, or non-obvious context about a project. Do NOT call it for trivial, throwaway, or purely exploratory chats. Idempotent.',
   {},
   async () => {
-    // Works from BOTH hosts: the current session is the transcript being written right
-    // now, whether it lives under ~/.claude/projects or ~/.codex/sessions.
+    // Works from EVERY host: the current session is the one being written right now by the
+    // agent that launched this server — under ~/.claude/projects, ~/.codex/sessions or in
+    // opencode's database (findCurrentTranscript prefers the launching agent's store).
     const newest = findCurrentTranscript(process.cwd());
     if (!newest) return { content: [{ type: 'text', text: 'No transcript found for the current session.' }] };
     const keep = join(homedir(), '.claude', 'brain', 'keep.list');

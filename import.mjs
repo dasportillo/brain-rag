@@ -1,4 +1,4 @@
-// Backfill EXISTING conversations (Claude Code transcripts + Codex rollouts) into the brain:
+// Backfill EXISTING conversations (Claude Code transcripts, Codex rollouts, opencode sessions) into the brain:
 // opt them into keep.list, then ingest. The brain is opt-in, so past conversations aren't
 // indexed until you import them.
 //   brain-rag import            # import ALL previous conversations
@@ -7,7 +7,7 @@
 import { readFileSync, existsSync, appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { walkJsonl, codexHeadCwd, gitRootName, ADAPTERS, CODEX_SESSIONS } from './transcripts.mjs';
+import { listSessions, codexHeadCwd, gitRootName, sessionProject, isOpencodePath, ADAPTERS, CODEX_SESSIONS } from './transcripts.mjs';
 
 const args = process.argv.slice(2);
 const DRY = args.includes('--dry');
@@ -17,12 +17,14 @@ const BRAIN_DIR = process.env.BRAIN_DIR || join(homedir(), '.claude', 'brain');
 const KEEP = join(BRAIN_DIR, 'keep.list');
 
 // Grouping label: Claude → the dashified project dir; Codex → the repo of the rollout's
-// recorded cwd (read from the file head, no full parse).
+// recorded cwd (read from the file head, no full parse); opencode → the repo of the session's
+// recorded directory (one indexed row, no full parse).
 const projOf = (f) => f.match(/\/projects\/([^/]+)\//)?.[1]
-  || (f.startsWith(CODEX_SESSIONS) ? `${gitRootName(codexHeadCwd(f)) ?? '?'} (codex)` : '?');
+  || (f.startsWith(CODEX_SESSIONS) ? `${gitRootName(codexHeadCwd(f)) ?? '?'} (codex)` : null)
+  || (isOpencodePath(f) ? `${sessionProject(f)} (opencode)` : '?');
 
-let files = ADAPTERS.flatMap(a => walkJsonl(a.root));
-// Codex rollout paths are date/uuid-named, so match the filter against the project label too.
+let files = listSessions();
+// Codex/opencode paths are date/id-named, so match the filter against the project label too.
 if (filter) files = files.filter(f => f.includes(filter) || projOf(f).includes(filter));
 
 if (!files.length) {

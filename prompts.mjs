@@ -3,19 +3,20 @@
 //
 // THE PROBLEM. distill-prompt.mjs is imported at runtime by the headless extractor, so a package
 // upgrade reaches it instantly. It does NOT reach `/distill`: the Claude Code slash command and
-// the Codex custom prompt are FILES that install.mjs writes ONCE (~/.claude/commands/distill.md,
-// ~/.codex/prompts/distill.md). Upgrade the package, keep using /distill, and the brain keeps
-// filling in the OLD dense format — silently, because nothing ever says the file is out of date.
+// the Codex/opencode custom prompts are FILES that install.mjs writes ONCE
+// (~/.claude/commands/distill.md, ~/.codex/prompts/distill.md,
+// ~/.config/opencode/commands/distill.md). Upgrade the package, keep using /distill, and the brain
+// keeps filling in the OLD dense format — silently, because nothing ever says the file is out of date.
 //
 // THE FIX. Each generated file carries a stamp: a short hash of the body brain-rag wrote. That
 // makes three states distinguishable WITHOUT any external bookkeeping — current, stale (we wrote
 // it, the package moved on), and edited (the user changed it, so it is theirs now). Then the two
 // things that ALREADY run on every session refresh the stale ones: the MCP server (`serve`,
-// registered in both hosts by install) and the SessionStart hook (`mark-keep`). Both run through
+// registered in every host by install) and the SessionStart hook (`mark-keep`). Both run through
 // `npx -y brain-rag`, which is why this covers the npx path that a package `postinstall` cannot.
 //
-// The refresh is idempotent (a current file is read and not written), cheap (six small reads plus
-// six hashes, sub-millisecond) and never throws — see refreshQuietly, which swallows everything
+// The refresh is idempotent (a current file is read and not written), cheap (nine small reads plus
+// nine hashes, sub-millisecond) and never throws — see refreshQuietly, which swallows everything
 // so a broken $HOME can never stop a session from starting.
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
@@ -23,6 +24,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { DISTILL_PROMPT } from './distill-prompt.mjs';
+import { opencodeConfigDir } from './opencode.mjs';
 
 // True when this module is running from a git working copy rather than an installed package: a
 // `.git` sits beside it. Published tarballs never ship one (npm excludes it), so this is only
@@ -84,6 +86,10 @@ export function promptFiles({ home = homedir(), name = PKG_NAME } = {}) {
   const npx = `npx -y ${name}`;
   const cmdDir = join(home, '.claude', 'commands');
   const codexDir = join(home, '.codex', 'prompts');
+  // opencode reads Markdown commands (frontmatter + template) from <config>/commands/*.md; like
+  // Codex it calls the MCP tools directly (opencode names them brain_<tool>).
+  const opencodeRoot = opencodeConfigDir({ home });
+  const opencodeDir = join(opencodeRoot, 'commands');
 
   const brainBody = (host) => host === 'codex'
     ? `Call the \`keep_session\` tool from the \`brain\` MCP server and report its one-line result verbatim. Do nothing else.
@@ -125,6 +131,15 @@ description: Distill THIS conversation into durable memories (Layer 2 of the sec
 ---
 ${DISTILL_PROMPT}`;
 
+  const opencodeBrain = `---
+description: Save THIS conversation to the "second brain" (off by default — nothing is saved)
+---
+${brainBody('codex')}`;
+  const opencodeState = `---
+description: Synthesize and save the curated current-state note for a project (state/<project>.md)
+---
+${codexState}`;
+
   return [
     { host: 'claude', dir: cmdDir, path: join(cmdDir, 'brain.md'), body: brainBody('claude') },
     { host: 'claude', dir: cmdDir, path: join(cmdDir, 'state.md'), body: claudeState },
@@ -132,6 +147,9 @@ ${DISTILL_PROMPT}`;
     { host: 'codex', dir: codexDir, path: join(codexDir, 'brain.md'), body: brainBody('codex') },
     { host: 'codex', dir: codexDir, path: join(codexDir, 'state.md'), body: codexState },
     { host: 'codex', dir: codexDir, path: join(codexDir, 'distill.md'), body: DISTILL_PROMPT },
+    { host: 'opencode', root: opencodeRoot, dir: opencodeDir, path: join(opencodeDir, 'brain.md'), body: opencodeBrain },
+    { host: 'opencode', root: opencodeRoot, dir: opencodeDir, path: join(opencodeDir, 'state.md'), body: opencodeState },
+    { host: 'opencode', root: opencodeRoot, dir: opencodeDir, path: join(opencodeDir, 'distill.md'), body: claudeDistill },
   ];
 }
 
@@ -148,8 +166,9 @@ export function syncPrompts({ home = homedir(), name = PKG_NAME, mode = 'refresh
   const out = { created: [], updated: [], backedUp: [], edited: [], skipped: [] };
 
   for (const f of promptFiles({ home, name })) {
-    // Codex is optional: its prompts exist only on a machine that has Codex.
+    // Codex and opencode are optional: their prompts exist only on a machine that has them.
     if (f.host === 'codex' && !existsSync(join(home, '.codex'))) { out.skipped.push(f.path); continue; }
+    if (f.host === 'opencode' && !existsSync(f.root)) { out.skipped.push(f.path); continue; }
     // A refresh never conjures directories; only an explicit install does.
     if (!install && !existsSync(f.dir)) { out.skipped.push(f.path); continue; }
 

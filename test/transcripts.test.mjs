@@ -10,6 +10,10 @@ import {
   ADAPTERS, registerAdapter, CLAUDE_PROJECTS, CODEX_SESSIONS,
 } from '../transcripts.mjs';
 
+// findCurrentTranscript defaults read the REAL opencode DB and detect the launching agent from the
+// environment (these tests may run inside Claude Code or opencode): pin both off.
+const isolated = (dir) => ({ opencodeRoot: join(dir, 'no-opencode.db'), host: null });
+
 test('redact scrubs known secret shapes', () => {
   assert.match(redact('h eyJabcdefgh.ijklmnop.qrstuvwx z'), /\[JWT_REDACTED\]/);
   assert.match(redact('AKIAABCDEFGHIJKLMNOP'), /\[AWS_KEY_REDACTED\]/);
@@ -155,7 +159,7 @@ test('adapter registry: a registered adapter is dispatched by parseSession and f
     assert.equal(parseSession(codex).cwd, '/Users/me/work/bar');
 
     // findCurrentTranscript surfaces the fake adapter's cwd-matched file with no built-in candidates
-    const opts = { claudeRoot: join(dir, 'no-claude'), codexRoot: join(dir, 'no-codex') };
+    const opts = { claudeRoot: join(dir, 'no-claude'), codexRoot: join(dir, 'no-codex'), ...isolated(dir) };
     assert.equal(findCurrentTranscript('/Users/me/work/foo', opts), fakeFile);
     // …and joins the pure-recency fallback when nothing matches the cwd
     assert.equal(findCurrentTranscript('/Users/elsewhere', opts), fakeFile);
@@ -188,7 +192,7 @@ test('findCurrentTranscript: probeCap bounds the cwd probe; dashified prefix mat
     probeCap: 1,
   });
   const claudeRoot = join(dir, 'claude-projects');
-  const opts = { claudeRoot, codexRoot: join(dir, 'no-codex') };
+  const opts = { claudeRoot, codexRoot: join(dir, 'no-codex'), ...isolated(dir) };
   try {
     assert.equal(findCurrentTranscript('/Users/me/work/foo', opts), newOther,
       'cap=1 probes only the newest file → the older match is unseen → pure-recency fallback');
@@ -251,7 +255,7 @@ test('findCurrentTranscript: newest across both stores, cwd-matched codex prefer
   utimesSync(codexMatch, t(2), t(2));
   utimesSync(codexOther, t(3), t(3)); // newest overall, but for ANOTHER cwd
 
-  const opts = { claudeRoot, codexRoot };
+  const opts = { claudeRoot, codexRoot, ...isolated(dir) };
   assert.equal(findCurrentTranscript(cwd, opts), codexMatch,
     'cwd-matched codex rollout beats a newer rollout from another project');
 

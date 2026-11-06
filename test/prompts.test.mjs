@@ -15,11 +15,12 @@ const {
 } = await import('../prompts.mjs');
 const { DISTILL_PROMPT, MEMORY_RULES } = await import('../distill-prompt.mjs');
 
-// A throwaway $HOME per test; `codex` decides whether this machine "has Codex".
-function fakeHome({ codex = false, commands = true } = {}) {
+// A throwaway $HOME per test; `codex` / `opencode` decide whether this machine "has" them.
+function fakeHome({ codex = false, opencode = false, commands = true } = {}) {
   const home = mkdtempSync(join(tmpdir(), 'brain-prompts-'));
   if (commands) mkdirSync(join(home, '.claude', 'commands'), { recursive: true });
   if (codex) mkdirSync(join(home, '.codex', 'prompts'), { recursive: true });
+  if (opencode) mkdirSync(join(home, '.config', 'opencode'), { recursive: true });
   return home;
 }
 const homes = [];
@@ -94,22 +95,23 @@ test('the commands point at the package by name, so a rename cannot orphan them'
 // ---------------------------------------------------------------------------
 
 test('install writes every file, stamped; a second install is a no-op', () => {
-  const h = home({ codex: true });
+  const h = home({ codex: true, opencode: true });
   const first = syncPrompts({ home: h, mode: 'install' });
-  assert.equal(first.created.length, 6, 'three Claude commands + three Codex prompts');
+  assert.equal(first.created.length, 9, 'three Claude commands + three Codex prompts + three opencode commands');
   for (const p of first.created) assert.equal(fileState(read(p), splitStamp(read(p)).body), 'current');
 
   const again = syncPrompts({ home: h, mode: 'install' });
   assert.deepEqual(again.created, []);
   assert.deepEqual(again.updated, [], 'idempotent: nothing rewritten when nothing changed');
-  assert.equal(again.skipped.length, 6);
+  assert.equal(again.skipped.length, 9);
 });
 
-test('install skips Codex entirely on a machine without it', () => {
+test('install skips Codex and opencode entirely on a machine without them', () => {
   const h = home({ codex: false });
   const r = syncPrompts({ home: h, mode: 'install' });
   assert.equal(r.created.length, 3);
   assert.ok(!existsSync(join(h, '.codex')), 'no ~/.codex is conjured');
+  assert.ok(!existsSync(join(h, '.config', 'opencode')), 'no ~/.config/opencode is conjured');
 });
 
 // ---------------------------------------------------------------------------
@@ -160,7 +162,7 @@ test('install DOES overwrite an edited file (you asked for it) but keeps a .bak'
 });
 
 test('a refresh of an already-current install writes nothing at all', () => {
-  const h = home({ codex: true });
+  const h = home({ codex: true, opencode: true });
   syncPrompts({ home: h, mode: 'install' });
   const before = promptFiles({ home: h }).map(f => read(f.path));
   const r = syncPrompts({ home: h, mode: 'refresh' });

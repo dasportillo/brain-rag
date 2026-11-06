@@ -1,7 +1,8 @@
 // INCREMENTAL ingestion of OPTED-IN transcripts into the store (opt-in via keep.list).
 //
 // How it updates (the key part):
-//   - Each session = one .jsonl file. We store its (mtime, bytes) in the `sessions` table.
+//   - Each session = one transcript path (a .jsonl file, or an opencode virtual path
+//     <opencode.db>#<session id>). We store its (mtime, bytes) in the `sessions` table.
 //   - On every run, per file:
 //       * if unchanged (same mtime and bytes) -> SKIP (nothing is re-embedded).
 //       * if new or grown (active session) -> delete its old chunks and re-index ONLY that one.
@@ -12,11 +13,11 @@
 //   node ingest.mjs --no-embed    # only parse/chunk/store (fast, no model)
 //   node ingest.mjs --limit 5     # process up to 5 sessions (for testing)
 //   node ingest.mjs --stats       # print index status and exit
-import { statSync, readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { openDb, vecToBlob, stats, diffChunks, linkEntities } from './store.mjs';
-import { parseSession, projectFromPath, gitRootName, chunkText, redact, walkJsonl, ADAPTERS } from './transcripts.mjs';
+import { parseSession, projectFromPath, gitRootName, chunkText, redact, listSessions, sessionStat, sessionExists } from './transcripts.mjs';
 
 // OPT-IN: by default NOTHING is indexed. Only sessions whose transcript is listed in
 // keep.list get indexed. Entries are added by `BRAIN=1 claude` (the mark-keep.mjs
@@ -46,8 +47,8 @@ if (has('--stats')) {
 let embed = null;
 if (!NO_EMBED) ({ embed } = await import('./embed.mjs'));
 
-// Every registered adapter's session store; any may be absent (walkJsonl returns [] then).
-const files = ADAPTERS.flatMap(a => walkJsonl(a.root));
+// Every registered adapter's session store; any may be absent (it contributes nothing then).
+const files = listSessions();
 const getSession    = db.prepare('SELECT mtime, bytes FROM sessions WHERE path = ?');
 const delChunks     = db.prepare('DELETE FROM chunks WHERE path = ?');
 const delChunkById  = db.prepare('DELETE FROM chunks WHERE id = ?');
@@ -63,7 +64,7 @@ let processed = 0, skipped = 0, totalChunks = 0;
 for (const file of files) {
   if (processed >= LIMIT) break;
   if (!KEPT.has(file)) { skipped++; continue; } // opt-in: only index what is marked in keep.list
-  const st = statSync(file);
+  const st = sessionStat(file);
   const mtime = Math.floor(st.mtimeMs);
   const prev = getSession.get(file);
   if (!FORCE && prev && prev.mtime === mtime && prev.bytes === st.size) { skipped++; continue; }
@@ -120,12 +121,12 @@ for (const file of files) {
   }
 }
 
-// prune sessions whose transcript file was deleted (self-healing; skip on partial --limit runs)
+// prune sessions whose transcript is gone from its store (self-healing; skip on partial --limit runs)
 let pruned = 0;
 if (LIMIT === Infinity) {
   const delSession = db.prepare('DELETE FROM sessions WHERE path = ?');
   for (const { path } of db.prepare('SELECT path FROM sessions').all()) {
-    if (existsSync(path)) continue;
+    if (sessionExists(path)) continue;
     db.exec('BEGIN'); delChunks.run(path); delSession.run(path); db.exec('COMMIT');
     pruned++;
   }
