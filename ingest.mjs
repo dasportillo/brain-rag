@@ -13,6 +13,13 @@
 //   node ingest.mjs --no-embed    # only parse/chunk/store (fast, no model)
 //   node ingest.mjs --limit 5     # process up to 5 sessions (for testing)
 //   node ingest.mjs --stats       # print index status and exit
+//   node ingest.mjs --prune       # ALSO drop indexed sessions whose transcript is gone (see below)
+//
+// The index is the ARCHIVE: once a session is indexed, its text lives in brain.db and no longer
+// depends on the agent keeping the transcript. Claude Code deletes transcripts older than
+// cleanupPeriodDays (30 by default), so pruning "gone" sessions on every run quietly erased the
+// archive — 353 sessions in one run on 2026-11-06 (issue #47). They are now only COUNTED
+// ("archived"); removing indexed sessions is always explicit: `brain-rag forget` or --prune.
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -35,6 +42,7 @@ const val = (f, d) => (has(f) ? args[args.indexOf(f) + 1] : d);
 const LIMIT = Number(val('--limit', Infinity));
 const NO_EMBED = has('--no-embed');
 const FORCE = has('--force'); // re-process even if unchanged (e.g. to backfill embeddings)
+const PRUNE = has('--prune'); // explicit: drop indexed sessions whose transcript is gone
 
 const db = openDb();
 
@@ -129,16 +137,18 @@ for (const file of files) {
   }
 }
 
-// prune sessions whose transcript is gone from its store (self-healing; skip on partial --limit runs)
-let pruned = 0;
+// Sessions whose transcript is gone from its store: kept in the index (the archive) and counted —
+// or, only with an explicit --prune, removed. Skipped on partial --limit runs either way.
+let pruned = 0, archived = 0;
 if (LIMIT === Infinity) {
   const delSession = db.prepare('DELETE FROM sessions WHERE path = ?');
   for (const { path } of db.prepare('SELECT path FROM sessions').all()) {
     if (sessionExists(path)) continue;
+    if (!PRUNE) { archived++; continue; }
     db.exec('BEGIN'); delChunks.run(path); delSession.run(path); db.exec('COMMIT');
     pruned++;
   }
 }
 
-console.log(`\n✔ ingest: ${processed} processed, ${skipped} unchanged (skip), ${totalChunks} new chunks${pruned ? `, ${pruned} pruned` : ''}${failed ? `, ${failed} FAILED (see ✗ lines above)` : ''}${NO_EMBED ? ' (no embeddings)' : ''}`);
+console.log(`\n✔ ingest: ${processed} processed, ${skipped} unchanged (skip), ${totalChunks} new chunks${pruned ? `, ${pruned} pruned (--prune)` : ''}${archived ? `, ${archived} archived (transcript gone, still searchable)` : ''}${failed ? `, ${failed} FAILED (see ✗ lines above)` : ''}${NO_EMBED ? ' (no embeddings)' : ''}`);
 console.log(stats(db));

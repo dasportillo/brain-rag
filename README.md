@@ -178,6 +178,8 @@ Add to `~/.claude/settings.json` (the installer prints these ready to paste):
 
 Then `BRAIN=1 claude` (or a `claude --brain` shell alias) starts a session that remembers itself, and every opted-in session is re-indexed automatically when it ends. Codex and opencode sessions ride the same ingest: they have no session-end hook, so a session you mark with `/brain` there is indexed by the next ingest run (the Claude Code hook, or `npx -y brain-rag ingest`).
 
+**Indexed means archived.** Claude Code deletes its own transcripts after `cleanupPeriodDays` (30 by default). Once a session is in the brain that no longer matters: its text lives in `brain.db`, and a session whose transcript is gone stays searchable — `ingest` reports it as *archived* and never deletes it on its own (remove sessions explicitly with `brain-rag forget`, or `ingest --prune`). Still, a session the agent deletes **before** the brain indexes it is gone for good, so raising `"cleanupPeriodDays"` in `~/.claude/settings.json` (e.g. `3650`) is a good idea.
+
 **Auto-distill + team sync at session end** (optional, costs tokens): append a distill hook to the `SessionEnd` array — it turns each kept session into typed memories and, if you've run `brain-rag cloud login`, pushes them to your team in the same step:
 
 ```jsonc

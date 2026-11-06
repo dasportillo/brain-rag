@@ -76,3 +76,28 @@ test('ingest: one unreadable transcript is reported and skipped; the others are 
   assert.match(out, /✔ ingest: 2 processed, .*1 FAILED/);
   assert.match(out, /sessions: 2/);
 });
+
+// Issue #47: Claude Code deletes transcripts after cleanupPeriodDays; the index is the archive,
+// so a vanished transcript must NOT take its indexed session with it — only --prune removes it.
+test('ingest: a session whose transcript is deleted stays indexed (archived); --prune removes it', () => {
+  const home = tmp('ingest-archive-');
+  const proj = join(home, '.claude', 'projects', '-w-foo');
+  mkdirSync(proj, { recursive: true });
+  const f = join(proj, 'old.jsonl');
+  writeFileSync(f, JSON.stringify({ type: 'user', message: { role: 'user', content: 'the decision to keep the archive immutable, long enough to be a chunk of the index' }, sessionId: 'old', cwd: '/w/foo' }));
+  mkdirSync(join(home, '.claude', 'brain'), { recursive: true });
+  writeFileSync(join(home, '.claude', 'brain', 'keep.list'), f + '\n');
+  const env = { ...process.env, HOME: home, BRAIN_DIR: join(home, '.claude', 'brain'), XDG_DATA_HOME: join(home, 'xdg') };
+  const ingest = (...args) => execFileSync(process.execPath, [join(ROOT, 'ingest.mjs'), '--no-embed', ...args], { env, encoding: 'utf8' });
+
+  assert.match(ingest(), /1 processed[\s\S]*sessions: 1/);
+  rmSync(f); // the agent's cleanup deletes the transcript
+  const after = ingest();
+  assert.match(after, /1 archived \(transcript gone, still searchable\)/);
+  assert.match(after, /sessions: 1, projects: 1, chunks: 1/, 'the indexed text survives');
+  assert.doesNotMatch(after, /pruned/);
+
+  const pruned = ingest('--prune');
+  assert.match(pruned, /1 pruned \(--prune\)/);
+  assert.match(pruned, /sessions: 0/);
+});

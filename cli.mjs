@@ -38,7 +38,8 @@ Usage: brain-rag <command>
   install         Register the MCP server (Claude Code + Codex) + slash commands, and print the hook wiring
   uninstall       Reverse of install (add --purge to also delete the index + state)
   serve           Run the MCP server (stdio) — this is what 'claude mcp add' / 'codex mcp add' launches
-  ingest          Ingest opted-in transcripts into the index
+  ingest          Ingest opted-in transcripts into the index. Sessions whose transcript the agent
+                  deleted stay searchable (archived); --prune removes them from the index
   import [filter] Backfill EXISTING conversations into the brain (--dry to preview)
   onboard         Joining a team? Pick which projects to bring over, then import + distill your
                   existing history and sync it to the team store in one guided run — costs tokens

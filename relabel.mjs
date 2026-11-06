@@ -23,7 +23,7 @@ let changed = 0, missing = 0, movedMemories = 0;
 const moves = new Map(); // "old → new" -> session count
 
 for (const { path, project, session } of sessions) {
-  if (!sessionExists(path)) { missing++; continue; } // transcript gone; leave as-is (ingest prunes it)
+  if (!sessionExists(path)) { missing++; continue; } // transcript gone; leave as-is (it stays indexed as archived)
   const { cwd } = parseSession(path);
   const next = (cwd && gitRootName(cwd)) || projectFromPath(path);
   if (!next || next === project) continue;
