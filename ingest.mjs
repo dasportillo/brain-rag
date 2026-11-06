@@ -59,65 +59,73 @@ const upsertSession = db.prepare(`
     project=excluded.project, session=excluded.session, mtime=excluded.mtime,
     bytes=excluded.bytes, chunks=excluded.chunks, indexed_at=excluded.indexed_at, title=excluded.title`);
 
-let processed = 0, skipped = 0, totalChunks = 0;
+let processed = 0, skipped = 0, failed = 0, totalChunks = 0;
 
 for (const file of files) {
   if (processed >= LIMIT) break;
   if (!KEPT.has(file)) { skipped++; continue; } // opt-in: only index what is marked in keep.list
-  const st = sessionStat(file);
-  const mtime = Math.floor(st.mtimeMs);
-  const prev = getSession.get(file);
-  if (!FORCE && prev && prev.mtime === mtime && prev.bytes === st.size) { skipped++; continue; }
+  // One transcript failing (unreadable, malformed, too big) must never stop the others: before
+  // issue #45 a single 594 MB transcript aborted every run, so nothing was indexed for weeks.
+  try {
+    const st = sessionStat(file);
+    const mtime = Math.floor(st.mtimeMs);
+    const prev = getSession.get(file);
+    if (!FORCE && prev && prev.mtime === mtime && prev.bytes === st.size) { skipped++; continue; }
 
-  const { turns, title, cwd } = parseSession(file);
-  // Project = the git repo the session ran in (stable across subdirs / OS / folder layout).
-  // Fall back to the dashified path only when the transcript has no cwd (older transcripts).
-  const project = (cwd && gitRootName(cwd)) || projectFromPath(file);
-  // compaction summaries are progressive (each recaps everything so far); keep only the LAST,
-  // the most complete one, so several near-duplicate summaries don't flood retrieval.
-  const lastSummaryIdx = turns.map(t => t.role).lastIndexOf('summary');
-  const records = [];
-  for (const [idx, turn] of turns.entries()) {
-    if (turn.role === 'summary' && idx !== lastSummaryIdx) continue; // drop superseded summaries
-    const clean = redact(turn.text);
-    if (turn.role === 'summary') {
-      // keep the summary WHOLE (a coherent recap) instead of shredding it into 1800-char chunks;
-      // embed a representative head slice (the model window truncates long text anyway).
-      records.push({ session: turn.session, ts: turn.ts, role: 'summary', text: clean, embedText: clean.slice(0, 2000) });
-      continue;
+    const { turns, title, cwd } = parseSession(file);
+    // Project = the git repo the session ran in (stable across subdirs / OS / folder layout).
+    // Fall back to the dashified path only when the transcript has no cwd (older transcripts).
+    const project = (cwd && gitRootName(cwd)) || projectFromPath(file);
+    // compaction summaries are progressive (each recaps everything so far); keep only the LAST,
+    // the most complete one, so several near-duplicate summaries don't flood retrieval.
+    const lastSummaryIdx = turns.map(t => t.role).lastIndexOf('summary');
+    const records = [];
+    for (const [idx, turn] of turns.entries()) {
+      if (turn.role === 'summary' && idx !== lastSummaryIdx) continue; // drop superseded summaries
+      const clean = redact(turn.text);
+      if (turn.role === 'summary') {
+        // keep the summary WHOLE (a coherent recap) instead of shredding it into 1800-char chunks;
+        // embed a representative head slice (the model window truncates long text anyway).
+        records.push({ session: turn.session, ts: turn.ts, role: 'summary', text: clean, embedText: clean.slice(0, 2000) });
+        continue;
+      }
+      for (const piece of chunkText(clean)) {
+        // drop tiny chunks (narration like "Let me check X" before a tool call)
+        if (piece.trim().length < 80) continue;
+        records.push({ session: turn.session, ts: turn.ts, role: turn.role, text: piece });
+      }
     }
-    for (const piece of chunkText(clean)) {
-      // drop tiny chunks (narration like "Let me check X" before a tool call)
-      if (piece.trim().length < 80) continue;
-      records.push({ session: turn.session, ts: turn.ts, role: turn.role, text: piece });
+
+    // Append-only: embed only new/changed chunks (matched by text), keep unchanged ones (they already
+    // have embeddings), delete stale ones. --force re-embeds the whole file (e.g. after a model swap).
+    const existingRows = FORCE ? [] : db.prepare('SELECT id, text FROM chunks WHERE path = ?').all(file);
+    const { toEmbed, staleIds } = diffChunks(existingRows, records);
+
+    let embeddings = [];
+    if (embed && toEmbed.length) embeddings = await embed(toEmbed.map(r => r.embedText ?? r.text));
+
+    db.exec('BEGIN');
+    if (FORCE) delChunks.run(file);
+    else for (const id of staleIds) delChunkById.run(id);
+    toEmbed.forEach((r, i) => {
+      const blob = embeddings[i] ? vecToBlob(embeddings[i]) : null;
+      const info = insChunk.run(file, project, r.session ?? null, r.ts ?? null, r.role, r.text, blob);
+      // entity graph: link only NEW chunks (regex-cheap vs the embedding we just paid for).
+      // Stale chunks deleted above may orphan old mentions — accepted, see store.mjs migration v3.
+      linkEntities(db, { chunkId: Number(info.lastInsertRowid), project, ts: r.ts ?? null, text: r.text });
+    });
+    upsertSession.run(file, project, records[0]?.session ?? null, mtime, st.size, records.length, new Date().toISOString(), title ?? null);
+    db.exec('COMMIT');
+
+    processed++;
+    totalChunks += toEmbed.length;
+    if (processed % 10 === 0 || records.length > 200) {
+      console.log(`  [${processed}] ${project} — ${records.length} chunks`);
     }
-  }
-
-  // Append-only: embed only new/changed chunks (matched by text), keep unchanged ones (they already
-  // have embeddings), delete stale ones. --force re-embeds the whole file (e.g. after a model swap).
-  const existingRows = FORCE ? [] : db.prepare('SELECT id, text FROM chunks WHERE path = ?').all(file);
-  const { toEmbed, staleIds } = diffChunks(existingRows, records);
-
-  let embeddings = [];
-  if (embed && toEmbed.length) embeddings = await embed(toEmbed.map(r => r.embedText ?? r.text));
-
-  db.exec('BEGIN');
-  if (FORCE) delChunks.run(file);
-  else for (const id of staleIds) delChunkById.run(id);
-  toEmbed.forEach((r, i) => {
-    const blob = embeddings[i] ? vecToBlob(embeddings[i]) : null;
-    const info = insChunk.run(file, project, r.session ?? null, r.ts ?? null, r.role, r.text, blob);
-    // entity graph: link only NEW chunks (regex-cheap vs the embedding we just paid for).
-    // Stale chunks deleted above may orphan old mentions — accepted, see store.mjs migration v3.
-    linkEntities(db, { chunkId: Number(info.lastInsertRowid), project, ts: r.ts ?? null, text: r.text });
-  });
-  upsertSession.run(file, project, records[0]?.session ?? null, mtime, st.size, records.length, new Date().toISOString(), title ?? null);
-  db.exec('COMMIT');
-
-  processed++;
-  totalChunks += toEmbed.length;
-  if (processed % 10 === 0 || records.length > 200) {
-    console.log(`  [${processed}] ${project} — ${records.length} chunks`);
+  } catch (e) {
+    try { db.exec('ROLLBACK'); } catch { /* no transaction open */ }
+    failed++;
+    console.error(`  ✗ skipped ${file}: ${e.code ?? ''} ${e.message}`.replace(/\s+/g, ' '));
   }
 }
 
@@ -132,5 +140,5 @@ if (LIMIT === Infinity) {
   }
 }
 
-console.log(`\n✔ ingest: ${processed} processed, ${skipped} unchanged (skip), ${totalChunks} new chunks${pruned ? `, ${pruned} pruned` : ''}${NO_EMBED ? ' (no embeddings)' : ''}`);
+console.log(`\n✔ ingest: ${processed} processed, ${skipped} unchanged (skip), ${totalChunks} new chunks${pruned ? `, ${pruned} pruned` : ''}${failed ? `, ${failed} FAILED (see ✗ lines above)` : ''}${NO_EMBED ? ' (no embeddings)' : ''}`);
 console.log(stats(db));
