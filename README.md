@@ -106,7 +106,7 @@ That's it. The installer registers the memory server with **Claude Code**, **Cod
 
 `/distill` is a **file** on disk (`~/.claude/commands/distill.md`, `~/.codex/prompts/distill.md`, `~/.config/opencode/commands/distill.md`), written at install time. The extraction rules inside it change between versions, so a file left from an older install would keep filling your brain in the old format long after you upgraded.
 
-It repairs itself. Every generated file is stamped with a hash of what Brain-RAG wrote, and the two things that already run on every session — the MCP server and the `mark-keep` SessionStart hook, both launched through `npx -y brain-rag` — rewrite any file the package has moved past. Nothing to remember, and it works under `npx` (an npm `postinstall` would not: `npx` never runs one).
+It repairs itself. Every generated file is stamped with a hash of what Brain-RAG wrote, and the things that already run on every session — the MCP server, the `mark-keep` SessionStart hook and the opencode plugin, all launched through `npx -y brain-rag` — rewrite any file the package has moved past (the opencode plugin itself included). Nothing to remember, and it works under `npx` (an npm `postinstall` would not: `npx` never runs one).
 
 Two cases it deliberately will not handle silently:
 
@@ -125,7 +125,7 @@ Brain-RAG speaks the open Model Context Protocol over stdio, so any MCP client c
 { "mcpServers": { "brain": { "command": "npx", "args": ["-y", "brain-rag", "serve"] } } }
 ```
 
-or the equivalent in your client's MCP configuration. All tools (`search_context`, `get_state`, `save_state`, `save_memories`, `keep_session`) work identically.
+or the equivalent in your client's MCP configuration. All tools (`get_context`, `search_context`, `explore_entity`, `get_state`, `save_state`, `save_memories`, `keep_session`, `list_projects`) work identically. Searching and saving works from any client; indexing that client's *own* conversations needs an adapter for its transcript format ([`docs/ADAPTERS.md`](https://github.com/dasportillo/brain-rag/blob/main/docs/ADAPTERS.md)).
 </details>
 
 <details>
@@ -186,12 +186,20 @@ Then `BRAIN=1 claude` (or a `claude --brain` shell alias) starts a session that 
 { "type": "command", "command": "nohup npx -y brain-rag distill --hook >> \"$HOME/.claude/brain/distill.log\" 2>&1 &", "timeout": 30 }
 ```
 
+**Project context at session start** (optional, model-free and instant): append to the `SessionStart` array — it injects the project's `get_context` briefing when a session opens in a repo the brain knows, and prints nothing elsewhere:
+
+```jsonc
+{ "type": "command", "command": "npx -y brain-rag context --hook", "timeout": 10 }
+```
+
 **Capture-all (opt-out) mode:** prefer keeping everything by default? `brain-rag default on` keeps every session; exclude a repo with `brain-rag never add` inside it. Precedence: `BRAIN=1/0` > `never.list` > `always.list` > `default`.
 </details>
 
 ### opencode runs on its own
 
-`install` drops a plugin into `~/.config/opencode/plugins/brain-rag.js` that does for opencode what the hooks above do for Claude Code — nothing to paste anywhere:
+`install` drops a plugin into `~/.config/opencode/plugins/brain-rag.js` that does for opencode what the hooks above do for Claude Code — nothing to paste anywhere. Restart opencode after installing so it loads the plugin.
+
+> **Out of the box nothing is kept — the brain is opt-in.** Run `npx -y brain-rag default on` to keep every opencode session automatically (exclude a repo with `brain-rag never add` inside it), or opt single sessions in with `/brain`.
 
 | opencode event | what brain-rag does |
 |---|---|
@@ -199,7 +207,7 @@ Then `BRAIN=1 claude` (or a `claude --brain` shell alias) starts a session that 
 | session goes idle | indexes it in the background (incremental, one ingest at a time) |
 | session quiet for 10 minutes | distills its memories with **opencode's own model**, then auto-syncs to the team if you're connected — a session resumed and grown later is distilled again |
 
-The plugin only spawns `brain-rag opencode …` detached, so it can never slow opencode down or break it. Logs go to `~/.claude/brain/opencode.log`. Distillation runs on whatever model your opencode uses by default (free and local models included) with every tool denied; turn it off with `npx -y brain-rag opencode distill off`, or tune `opencodeDistillQuietMinutes` / `opencodeDistillModel` in `~/.claude/brain/config.json`. Running brain-rag from a checkout? Start opencode with `BRAIN_RAG_BIN="node /path/to/brain-rag/cli.mjs"`.
+The plugin only spawns `brain-rag opencode …` in the background and swallows its own errors, so it can never slow opencode down or break it. It works on macOS, Linux and Windows (where it goes through `cmd.exe` with hidden windows; a run still in progress when you close opencode's terminal resumes on the next session). Logs go to `~/.claude/brain/opencode.log` — the first place to look if nothing is being kept. Distillation runs on whatever model your opencode uses by default (free and local models included) with every tool denied; turn it off with `npx -y brain-rag opencode distill off`, or tune `opencodeDistillQuietMinutes` / `opencodeDistillModel` in `~/.claude/brain/config.json`. Running brain-rag from a checkout? Start opencode with `BRAIN_RAG_BIN="node /path/to/brain-rag/cli.mjs"`.
 
 ## 🏗️ Architecture
 
@@ -313,10 +321,11 @@ Brain-RAG is evolving from *searchable history* into a full **long-term memory s
 - ✅ Multi-agent: Claude Code + Codex + opencode sharing one brain
 - ✅ Team ramp-up: `brain-rag onboard` turns a developer's existing history into team memory; `brain-rag consolidate` judges the near-duplicates bulk distillation leaves behind (merge / supersede / close resolved TODOs — nothing deleted)
 - ✅ Memories written for a reader: one claim each, the conclusion first, a title that is a claim and not a summary — every new memory is distilled to that shape, by `/distill` and by the headless extractor alike
-- 🔜 Automatic distillation at session end — knowledge extraction with zero manual steps
-- 🔜 `get_context`: a ready-made project briefing (state + decisions + open TODOs + conflicts) injected when a session starts
-- 🔜 Entity graph (services ↔ databases ↔ projects) complementing search
-- 🔜 Local reranker — ships only if the benchmark says it earns its latency
+- ✅ Automatic distillation — the Claude Code `distill --hook` at session end, and the opencode plugin once a session goes quiet
+- ✅ `get_context`: a ready-made project briefing (state + decisions + open TODOs + conflicts), also injectable at session start with `context --hook`
+- ✅ Entity graph (services ↔ databases ↔ projects ↔ files) complementing search — `explore_entity`
+- ✅ Local cross-encoder reranker, opt-in per query (`rerank: true`) — sharper for cross-language queries, off by default because it costs latency
+- ✅ The index is the archive: sessions stay searchable after the agent deletes its transcript
 
 ## 🤝 Contributing
 
@@ -326,7 +335,7 @@ Great places to start:
 
 - 🧪 Grow the eval: more case kinds, more languages
 - 🔌 Adapters: transcript formats for more agents (Cursor, Windsurf, VS Code agent mode)
-- 🧹 The [roadmap](https://github.com/dasportillo/brain-rag/blob/main/docs/ROADMAP.md) 🔜 items above
+- 🧹 What's next in the [roadmap](https://github.com/dasportillo/brain-rag/blob/main/docs/ROADMAP.md)
 
 ```bash
 git clone https://github.com/dasportillo/brain-rag.git && cd brain-rag
