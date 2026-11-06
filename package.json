@@ -25,6 +25,7 @@
     "relabel.mjs",
     "transcripts.mjs",
     "opencode.mjs",
+    "opencode-hook.mjs",
     "search.mjs",
     "entities.mjs",
     "entities-cli.mjs",
