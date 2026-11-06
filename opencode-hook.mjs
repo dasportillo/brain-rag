@@ -21,8 +21,7 @@ import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, rmS
 import { join, dirname, resolve } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { execFile, execFileSync } from 'node:child_process';
-import { promisify } from 'node:util';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { decideKeep } from './mark-keep.mjs';
 import { readAlwaysList } from './always.mjs';
 import { readNeverList } from './never.mjs';
@@ -131,16 +130,55 @@ export function ingestLocked({ dir = STATE_DIR, run = () => execFileSync(process
   return `ran ${runs}`;
 }
 
+// ---------------------------------------------------------------------------
+// Launching programs on every OS (issue #52)
+// ---------------------------------------------------------------------------
+// On Windows, npm-installed CLIs (npx, opencode) are .cmd shims, and Node refuses to spawn a .cmd
+// without a shell (EINVAL) — the plugin swallowed that error, so on Windows nothing was ever kept.
+// There the command line goes through cmd.exe, each argument quoted; everywhere else it is a plain
+// argv spawn. Nothing long goes on the command line: cmd.exe caps it at ~8191 characters, so the
+// extractor prompt travels on stdin.
+export function winQuote(arg) {
+  const s = String(arg);
+  return /^[\w.:\\/=+@-]+$/.test(s) ? s : `"${s.replace(/"/g, '')}"`;
+}
+export function commandFor(cmd, args, platform = process.platform) {
+  return platform === 'win32'
+    ? { file: [cmd, ...args].map(winQuote).join(' '), args: [], shell: true }
+    : { file: cmd, args, shell: false };
+}
+
+// Run a command to completion, feeding `input` on stdin; resolves with stdout.
+export function runCapture(cmd, args, { input = '', cwd, env, timeout = 600_000, platform = process.platform } = {}) {
+  const c = commandFor(cmd, args, platform);
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(c.file, c.args, { cwd, env, shell: c.shell, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    let out = '', err = '';
+    const timer = setTimeout(() => { child.kill(); reject(new Error(`${cmd} timed out after ${timeout / 1000}s`)); }, timeout);
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { err += d; });
+    child.on('error', (e) => { clearTimeout(timer); reject(e); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      code === 0 ? resolvePromise(out) : reject(new Error(`${cmd} exited ${code}: ${err.trim().slice(-500)}`));
+    });
+    child.stdin.on('error', () => { /* the child may exit before reading everything */ });
+    child.stdin.end(input);
+  });
+}
+
 // The extractor: the user's own opencode, headless, tools denied, plugins off (--pure), and
-// BRAIN=0 so its session is never kept. Its throwaway session is deleted afterwards.
-const execFileP = promisify(execFile);
+// BRAIN=0 so its session is never kept. `opencode run` reads its message from stdin when no
+// message argument is given, which keeps the ~12k-character prompt off the command line.
+// Its throwaway session is deleted afterwards.
 export async function runOpencode(prompt, { model } = {}) {
-  const args = ['run', '--pure', '--format', 'json', ...(model ? ['-m', model] : []), prompt];
+  const args = ['run', '--pure', '--format', 'json', ...(model ? ['-m', model] : [])];
   const env = { ...process.env, BRAIN: '0', OPENCODE_CONFIG_CONTENT: EXTRACTOR_CONFIG };
-  const { stdout } = await execFileP('opencode', args, { cwd: tmpdir(), env, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 600_000 });
+  const stdout = await runCapture('opencode', args, { input: prompt, cwd: tmpdir(), env });
   const { sessionId, text } = parseOpencodeRun(stdout);
   if (sessionId) {
-    try { execFileSync('opencode', ['session', 'delete', sessionId], { stdio: 'ignore', timeout: 60_000 }); } catch { /* cosmetic */ }
+    const c = commandFor('opencode', ['session', 'delete', sessionId]);
+    try { spawnSync(c.file, c.args, { shell: c.shell, stdio: 'ignore', timeout: 60_000, windowsHide: true }); } catch { /* cosmetic */ }
   }
   return text;
 }
