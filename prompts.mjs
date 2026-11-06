@@ -46,16 +46,20 @@ const normalize = (body) => String(body).replace(/\n+$/, '') + '\n';
 
 export const bodyHash = (body) => createHash('sha256').update(normalize(body)).digest('hex').slice(0, 12);
 
-const marker = (hash) =>
-  `<!-- brain-rag:prompt ${hash} — generated file, refreshed automatically on upgrade; edit it and brain-rag leaves it alone -->`;
+const MARKER_TEXT = 'generated file, refreshed automatically on upgrade; edit it and brain-rag leaves it alone';
+const marker = (hash, style = 'html') => style === 'js'
+  ? `// brain-rag:prompt ${hash} — ${MARKER_TEXT}`
+  : `<!-- brain-rag:prompt ${hash} — ${MARKER_TEXT} -->`;
 
 // A generated file is `body + blank line + marker`. The marker is an HTML comment: invisible where
-// Markdown is rendered, and inert where the file IS the prompt (Codex).
-export const stamp = (body) => `${normalize(body)}\n${marker(bodyHash(body))}\n`;
+// Markdown is rendered, and inert where the file IS the prompt (Codex). Generated CODE (the
+// opencode plugin) carries the same marker as a // line comment (style 'js').
+export const stamp = (body, style = 'html') => `${normalize(body)}\n${marker(bodyHash(body), style)}\n`;
 
 // Split a file back into what brain-rag wrote and the hash it claimed. `hash: null` = unstamped.
 export function splitStamp(text) {
-  const m = String(text).match(/\n<!-- brain-rag:prompt ([0-9a-f]{12})[^>]*-->\n?$/);
+  const m = String(text).match(/\n<!-- brain-rag:prompt ([0-9a-f]{12})[^>]*-->\n?$/)
+    ?? String(text).match(/\n\/\/ brain-rag:prompt ([0-9a-f]{12})[^\n]*\n?$/);
   return m ? { body: text.slice(0, m.index), hash: m[1] } : { body: String(text), hash: null };
 }
 
@@ -131,14 +135,31 @@ description: Distill THIS conversation into durable memories (Layer 2 of the sec
 ---
 ${DISTILL_PROMPT}`;
 
+  // opencode prefixes MCP tools with the server name: keep_session is `brain_keep_session` there.
+  // Naming the exact tool matters — small local models otherwise hunt for a tool called
+  // "keep_session", find none, and answer in prose instead of calling it.
   const opencodeBrain = `---
 description: Save THIS conversation to the "second brain" (off by default — nothing is saved)
 ---
-${brainBody('codex')}`;
+Call the \`brain_keep_session\` tool (the \`keep_session\` tool of the \`brain\` MCP server) and report its one-line result verbatim. Do nothing else.
+(The brain is OFF by default; this opts THIS session in so it does get indexed, in full.)
+`;
   const opencodeState = `---
 description: Synthesize and save the curated current-state note for a project (state/<project>.md)
 ---
-${codexState}`;
+Build and persist the curated CURRENT-STATE note for the project \`$ARGUMENTS\` (if empty, infer it from the current working directory), using the \`brain\` MCP server tools.
+
+1. Call \`brain_get_state\` for that project — it returns the curated note, or recent activity when none exists. If it finds nothing, call \`brain_list_projects\` and retry with the exact name.
+2. Synthesize a concise note: **Now**, **In flight**, **Decisions**, **Blockers**, **Next**. Omit anything reverted or superseded.
+3. Call \`brain_save_state\` with that Markdown (same project if one was given).
+4. Report the saved path on a single line.
+`;
+  const opencodeDistill = `---
+description: Distill THIS conversation into durable memories (Layer 2 of the second brain)
+---
+In opencode the brain tools are named \`brain_<tool>\`: call \`brain_save_memories\` where the steps below say \`save_memories\`.
+
+${DISTILL_PROMPT}`;
 
   return [
     { host: 'claude', dir: cmdDir, path: join(cmdDir, 'brain.md'), body: brainBody('claude') },
@@ -149,8 +170,53 @@ ${codexState}`;
     { host: 'codex', dir: codexDir, path: join(codexDir, 'distill.md'), body: DISTILL_PROMPT },
     { host: 'opencode', root: opencodeRoot, dir: opencodeDir, path: join(opencodeDir, 'brain.md'), body: opencodeBrain },
     { host: 'opencode', root: opencodeRoot, dir: opencodeDir, path: join(opencodeDir, 'state.md'), body: opencodeState },
-    { host: 'opencode', root: opencodeRoot, dir: opencodeDir, path: join(opencodeDir, 'distill.md'), body: claudeDistill },
+    { host: 'opencode', root: opencodeRoot, dir: opencodeDir, path: join(opencodeDir, 'distill.md'), body: opencodeDistill },
+    { host: 'opencode', root: opencodeRoot, dir: join(opencodeRoot, 'plugins'), path: join(opencodeRoot, 'plugins', 'brain-rag.js'), body: opencodePluginBody(name), style: 'js' },
   ];
+}
+
+// The opencode plugin: the counterpart of the Claude Code SessionStart/SessionEnd hooks. It only
+// SPAWNS `brain-rag opencode …` detached (see opencode-hook.mjs) — `opencode run` exits as soon
+// as a session goes idle, so nothing slow may live in-process, and a plugin that throws would
+// break opencode itself, so every path is wrapped.
+export function opencodePluginBody(name = PKG_NAME) {
+  return `// brain-rag for opencode — keeps opted-in sessions and indexes + distills them automatically,
+// like the Claude Code hooks do. Policy: BRAIN=1/0 > never.list > always.list > \`brain-rag default\`.
+// Logs: <BRAIN_DIR>/opencode.log. Auto-distill toggle: \`brain-rag opencode distill on|off\`.
+// Run a checkout instead of the npm package: BRAIN_RAG_BIN="node /path/to/brain-rag/cli.mjs".
+import { spawn } from 'node:child_process';
+import { openSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
+
+const BIN = (process.env.BRAIN_RAG_BIN || 'npx -y ${name}').trim().split(/\\s+/);
+const BRAIN_DIR = process.env.BRAIN_DIR || join(homedir(), '.claude', 'brain');
+const dirs = new Map(); // session id -> directory, from session.created (session.idle carries only the id)
+
+function run(...args) {
+  try {
+    mkdirSync(BRAIN_DIR, { recursive: true });
+    const out = openSync(join(BRAIN_DIR, 'opencode.log'), 'a');
+    spawn(BIN[0], [...BIN.slice(1), 'opencode', ...args], { detached: true, stdio: ['ignore', out, out] }).unref();
+  } catch { /* the brain must never break opencode */ }
+}
+
+export const BrainRag = async () => ({
+  event: async ({ event }) => {
+    try {
+      if (event.type === 'session.created') {
+        const info = event.properties?.info;
+        if (!info?.id || info.parentID) return; // a child session is a subagent run, not a conversation
+        dirs.set(info.id, info.directory);
+        run('start', info.id, info.directory);
+      } else if (event.type === 'session.idle') {
+        const id = event.properties?.sessionID;
+        if (id) run('idle', id, dirs.get(id) ?? '');
+      }
+    } catch { /* never break opencode */ }
+  },
+});
+`;
 }
 
 // ---------------------------------------------------------------------------
@@ -191,7 +257,7 @@ export function syncPrompts({ home = homedir(), name = PKG_NAME, mode = 'refresh
     }
 
     mkdirSync(f.dir, { recursive: true });
-    writeFileSync(f.path, stamp(f.body));
+    writeFileSync(f.path, stamp(f.body, f.style));
     (state === 'missing' ? out.created : out.updated).push(f.path);
   }
   return out;

@@ -365,7 +365,7 @@ export function listOpencodeSessions(dbPath = OPENCODE_DB) {
   });
 }
 
-function opencodeSessionMeta(p) {
+export function opencodeSessionMeta(p) {
   const hit = opencodeMeta.get(p);
   if (hit) return hit;
   const ref = splitOpencodePath(p);

@@ -99,7 +99,7 @@ Requires **Node 22.5+**.
 npx -y brain-rag install
 ```
 
-That's it. The installer registers the memory server with **Claude Code**, **Codex** and **opencode** (each one if present), installs the `/brain`, `/state` and `/distill` commands in all of them, and prints the optional automation hooks. For opencode it adds a `brain` entry under `mcp` in your global config (`~/.config/opencode/opencode.jsonc`, or `opencode.json`), editing it in place so your comments survive and leaving a `.bak-brain-rag` copy next to it.
+That's it. The installer registers the memory server with **Claude Code**, **Codex** and **opencode** (each one if present), installs the `/brain`, `/state` and `/distill` commands in all of them, and prints the optional automation hooks. For opencode it adds a `brain` entry under `mcp` in your global config (`~/.config/opencode/opencode.jsonc`, or `opencode.json`), editing it in place so your comments survive and leaving a `.bak-brain-rag` copy next to it. It also installs a **plugin** and a short brain section in `~/.config/opencode/AGENTS.md` (only the block between brain-rag's markers is ever touched), so opencode needs no hook wiring at all — see [opencode runs on its own](#opencode-runs-on-its-own).
 
 <details>
 <summary><b>Upgrading — the slash commands keep themselves current</b></summary>
@@ -176,7 +176,7 @@ Add to `~/.claude/settings.json` (the installer prints these ready to paste):
 "SessionEnd":   [{ "matcher": "", "hooks": [{ "type": "command", "command": "nohup npx -y brain-rag ingest >> \"$HOME/.claude/brain/ingest.log\" 2>&1 &", "timeout": 30 }] }]
 ```
 
-Then `BRAIN=1 claude` (or a `claude --brain` shell alias) starts a session that remembers itself, and every opted-in session is re-indexed automatically when it ends. Codex and opencode sessions ride the same ingest: they have no session-end hook, so a session you mark with `/brain` there is indexed by the next ingest run (the Claude Code hook, or `npx -y brain-rag ingest`).
+Then `BRAIN=1 claude` (or a `claude --brain` shell alias) starts a session that remembers itself, and every opted-in session is re-indexed automatically when it ends. Codex sessions ride the same ingest: Codex has no session-end hook, so a session you mark with `/brain` there is indexed by the next ingest run (the Claude Code hook, or `npx -y brain-rag ingest`). opencode does its own — see below.
 
 **Indexed means archived.** Claude Code deletes its own transcripts after `cleanupPeriodDays` (30 by default). Once a session is in the brain that no longer matters: its text lives in `brain.db`, and a session whose transcript is gone stays searchable — `ingest` reports it as *archived* and never deletes it on its own (remove sessions explicitly with `brain-rag forget`, or `ingest --prune`). Still, a session the agent deletes **before** the brain indexes it is gone for good, so raising `"cleanupPeriodDays"` in `~/.claude/settings.json` (e.g. `3650`) is a good idea.
 
@@ -188,6 +188,18 @@ Then `BRAIN=1 claude` (or a `claude --brain` shell alias) starts a session that 
 
 **Capture-all (opt-out) mode:** prefer keeping everything by default? `brain-rag default on` keeps every session; exclude a repo with `brain-rag never add` inside it. Precedence: `BRAIN=1/0` > `never.list` > `always.list` > `default`.
 </details>
+
+### opencode runs on its own
+
+`install` drops a plugin into `~/.config/opencode/plugins/brain-rag.js` that does for opencode what the hooks above do for Claude Code — nothing to paste anywhere:
+
+| opencode event | what brain-rag does |
+|---|---|
+| session created | applies the same keep policy (`BRAIN=1/0` > `never.list` > `always.list` > `brain-rag default`) |
+| session goes idle | indexes it in the background (incremental, one ingest at a time) |
+| session quiet for 10 minutes | distills its memories with **opencode's own model**, then auto-syncs to the team if you're connected — a session resumed and grown later is distilled again |
+
+The plugin only spawns `brain-rag opencode …` detached, so it can never slow opencode down or break it. Logs go to `~/.claude/brain/opencode.log`. Distillation runs on whatever model your opencode uses by default (free and local models included) with every tool denied; turn it off with `npx -y brain-rag opencode distill off`, or tune `opencodeDistillQuietMinutes` / `opencodeDistillModel` in `~/.claude/brain/config.json`. Running brain-rag from a checkout? Start opencode with `BRAIN_RAG_BIN="node /path/to/brain-rag/cli.mjs"`.
 
 ## 🏗️ Architecture
 

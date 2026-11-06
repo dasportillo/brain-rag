@@ -6,7 +6,7 @@
 import { execSync } from 'node:child_process';
 import { rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { opencodeConfigDir, opencodeConfigFile, removeBrainMcp, editOpencodeConfig } from './opencode.mjs';
+import { opencodeConfigDir, opencodeConfigFile, removeBrainMcp, editOpencodeConfig, editAgentsFile, removeAgentsBlock } from './opencode.mjs';
 import { homedir } from 'node:os';
 
 const PURGE = process.argv.includes('--purge');
@@ -43,6 +43,17 @@ if (existsSync(OPENCODE_DIR)) {
   }
 }
 
+// 1d. opencode AGENTS.md: drop only brain-rag's marked section (the rest of the file is yours).
+if (existsSync(OPENCODE_DIR)) {
+  const agents = join(OPENCODE_DIR, 'AGENTS.md');
+  try {
+    const r = editAgentsFile(agents, removeAgentsBlock);
+    if (r.changed) console.log(`▸ removed the brain section from ${agents}${r.removed ? ' (file was otherwise empty — deleted)' : ''}`);
+  } catch (e) {
+    console.log(`▸ could not edit ${agents} (${e.message}) — remove the brain-rag:agents block yourself`);
+  }
+}
+
 // 2. Remove the slash commands / custom prompts we installed. A `<file>.bak` left by a prompt
 // refresh is NOT removed: that copy exists because the text was yours, not ours.
 for (const p of [
@@ -50,7 +61,7 @@ for (const p of [
   join(homedir(), '.codex', 'prompts', 'brain.md'), join(homedir(), '.codex', 'prompts', 'state.md'),
   join(homedir(), '.codex', 'prompts', 'distill.md'),
   join(OPENCODE_DIR, 'commands', 'brain.md'), join(OPENCODE_DIR, 'commands', 'state.md'),
-  join(OPENCODE_DIR, 'commands', 'distill.md'),
+  join(OPENCODE_DIR, 'commands', 'distill.md'), join(OPENCODE_DIR, 'plugins', 'brain-rag.js'),
 ]) {
   if (existsSync(p)) { rmSync(p); console.log(`▸ removed ${p}`); }
   if (existsSync(p + '.bak')) console.log(`▸ kept your ${p}.bak (delete it yourself if you don't want it)`);

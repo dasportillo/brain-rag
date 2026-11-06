@@ -97,13 +97,13 @@ test('the commands point at the package by name, so a rename cannot orphan them'
 test('install writes every file, stamped; a second install is a no-op', () => {
   const h = home({ codex: true, opencode: true });
   const first = syncPrompts({ home: h, mode: 'install' });
-  assert.equal(first.created.length, 9, 'three Claude commands + three Codex prompts + three opencode commands');
+  assert.equal(first.created.length, 10, 'three Claude commands + three Codex prompts + three opencode commands + the opencode plugin');
   for (const p of first.created) assert.equal(fileState(read(p), splitStamp(read(p)).body), 'current');
 
   const again = syncPrompts({ home: h, mode: 'install' });
   assert.deepEqual(again.created, []);
   assert.deepEqual(again.updated, [], 'idempotent: nothing rewritten when nothing changed');
-  assert.equal(again.skipped.length, 9);
+  assert.equal(again.skipped.length, 10);
 });
 
 test('install skips Codex and opencode entirely on a machine without them', () => {

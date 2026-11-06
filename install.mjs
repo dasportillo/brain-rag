@@ -10,7 +10,7 @@ import { homedir } from 'node:os';
 // same module refreshes them from `serve` / the SessionStart hook when a later version changes
 // them, so /distill can never keep running last year's rules).
 import { syncPrompts } from './prompts.mjs';
-import { opencodeConfigDir, opencodeConfigFile, addBrainMcp, brainEntry, editOpencodeConfig } from './opencode.mjs';
+import { opencodeConfigDir, opencodeConfigFile, addBrainMcp, brainEntry, editOpencodeConfig, editAgentsFile, upsertAgentsBlock } from './opencode.mjs';
 import { OPENCODE_DB } from './transcripts.mjs';
 
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
@@ -83,13 +83,22 @@ if (HAS_OPENCODE) {
   } catch (e) {
     console.log(`▸ could not edit ${file} (${e.message}) — add this under "mcp" yourself:\n    "brain": ${JSON.stringify(brainEntry(NAME))}`);
   }
+  // The rules section that makes the model use the brain on its own (the role ~/.codex/AGENTS.md
+  // plays for Codex). Only brain-rag's marked block is written; the rest of the file is yours.
+  const agents = join(OPENCODE_DIR, 'AGENTS.md');
+  try {
+    const r = editAgentsFile(agents, (t) => upsertAgentsBlock(t));
+    console.log(r.changed ? `▸ wrote the brain section in ${agents}` : `▸ brain section in ${agents} already current — skipping`);
+  } catch (e) {
+    console.log(`▸ could not write ${agents} (${e.message})`);
+  }
   console.log(`
-▸ opencode tip — add a short section to ${join(OPENCODE_DIR, 'AGENTS.md')} so the model uses the
-  brain proactively (same text as the Codex tip; opencode names the tools brain_get_context,
-  brain_search_context, brain_keep_session, …).
-
-  opencode has no session-end hook either: sessions marked with /brain (or keep_session) are indexed
-  by the next ingest run (the Claude Code SessionEnd hook, or '${NPX} ingest' manually / on a schedule).`);
+▸ opencode runs on its own — the brain-rag plugin (installed below, in ${join(OPENCODE_DIR, 'plugins')})
+  is the counterpart of the Claude Code hooks:
+    session created  → keep policy (BRAIN=1/0 > never.list > always.list > '${NPX} default')
+    session idle     → ingest in the background
+    quiet 10 minutes → distill memories with opencode's own model + team auto-sync
+  Turn the distillation off with '${NPX} opencode distill off'. Logs: ${join(BRAIN_DIR, 'opencode.log')}.`);
 }
 
 // 2. Slash commands + Codex prompts — generated from prompts.mjs so they always point at THIS
@@ -100,7 +109,8 @@ const synced = syncPrompts({ mode: 'install' });
 for (const p of synced.backedUp) console.log(`▸ your previous version was kept at ${p}`);
 console.log(`▸ installed /brain, /state and /distill → ${CMD_DIR}`);
 if (existsSync(CODEX_HOME)) console.log(`▸ installed Codex /brain, /state and /distill prompts → ${join(CODEX_HOME, 'prompts')}`);
-if (existsSync(OPENCODE_DIR)) console.log(`▸ installed opencode /brain, /state and /distill commands → ${join(OPENCODE_DIR, 'commands')}`);
+if (existsSync(OPENCODE_DIR)) console.log(`▸ installed opencode /brain, /state and /distill commands → ${join(OPENCODE_DIR, 'commands')}
+▸ installed the opencode plugin → ${join(OPENCODE_DIR, 'plugins', 'brain-rag.js')} (restart opencode to load it)`);
 console.log(`▸ these files are refreshed automatically on upgrade — by the MCP server and by the
   SessionStart hook, both of which run through '${NPX}'. If you use NEITHER (no 'brain' MCP server
   registered and no mark-keep hook), re-run '${NPX} install' after upgrading or /distill will keep

@@ -23,6 +23,7 @@ switch (cmd) {
   // their pure helpers; the SessionStart hook runs `node mark-keep.mjs` directly (self-executing guard).
   case 'mark-keep':    await (await import('./mark-keep.mjs')).main(); break; // SessionStart keep hook
   case 'mark-current': await import('./mark-current-keep.mjs'); break;  // /brain backend
+  case 'opencode':     await (await import('./opencode-hook.mjs')).main(); break; // opencode plugin backend + auto-distill toggle
   case 'distill':      await (await import('./distill.mjs')).main(); break; // batch memory extraction (headless claude -p)
   case 'always':       await (await import('./always.mjs')).main(); break;  // standing per-repo opt-in (always.list)
   case 'never':        await (await import('./never.mjs')).main(); break;   // standing per-repo opt-OUT (never.list)
@@ -31,11 +32,12 @@ switch (cmd) {
   case 'install':      await import('./install.mjs'); break;            // wire into Claude Code + Codex
   case 'uninstall':    await import('./uninstall.mjs'); break;          // unregister + remove commands
   default:
-    console.log(`brain-rag — local, private RAG second brain over your Claude Code & Codex transcripts
+    console.log(`brain-rag — local, private RAG second brain over your Claude Code, Codex & opencode transcripts
 
 Usage: brain-rag <command>
 
-  install         Register the MCP server (Claude Code + Codex) + slash commands, and print the hook wiring
+  install         Register the MCP server (Claude Code + Codex + opencode) + slash commands, the opencode
+                  plugin (automatic keep/ingest/distill) and print the Claude Code hook wiring
   uninstall       Reverse of install (add --purge to also delete the index + state)
   serve           Run the MCP server (stdio) — this is what 'claude mcp add' / 'codex mcp add' launches
   ingest          Ingest opted-in transcripts into the index. Sessions whose transcript the agent
@@ -68,6 +70,8 @@ Usage: brain-rag <command>
   cloud           Team sync (Brain-RAG Teams): login | sync [--review] | status | logout — only distilled memories, never transcripts
   mark-keep       SessionStart hook: decide + record whether this session is kept (BRAIN / never / always / default)
   mark-current    Opt the CURRENT session in (the /brain command backend)
+  opencode        opencode plugin backend: start <id> <dir> | idle <id> [dir] (spawned by the plugin),
+                  distill on | off | status — automatic distillation of kept opencode sessions
 `);
     if (cmd && !['help', '--help', '-h'].includes(cmd)) process.exit(1);
 }
