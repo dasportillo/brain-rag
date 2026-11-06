@@ -69,6 +69,8 @@ test('plugin: Windows path spawns through a shell with quoted args and a hidden 
   assert.match(body, /const WIN = process\.platform === 'win32'/);
   assert.match(body, /WIN \? spawn\(\[BIN\[0\], \.\.\.argv\]\.map\(q\)\.join\(' '\), \[\], \{ \.\.\.opts, shell: true \}\)/);
   assert.match(body, /windowsHide: true/);
+  // issue #55: a detached process gets its own console on Windows, and windowsHide does not hide it
+  assert.match(body, /detached: !WIN/, 'never detached on Windows (no console window per event)');
   assert.match(body, /child\.on\('error'/, 'a missing binary never becomes an unhandled error in opencode');
   // pinned to the package version, so npx can never keep running a stale cached release
   assert.match(opencodePluginBody('brain-rag', '9.9.9'), /'npx -y brain-rag@9\.9\.9'/);
