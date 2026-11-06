@@ -285,6 +285,9 @@ test('opencode commands: written only where opencode is installed, MCP-tool base
   assert.ok(!brain.includes('npx -y'), 'calls the MCP tool, never a shell command');
   assert.match(brain, /<!-- brain-rag:prompt [0-9a-f]{12}/);
   assert.match(readFileSync(cmd('distill.md'), 'utf8'), /save_memories/);
+  assert.match(brain, /`brain_keep_session`/, 'names the tool the way opencode exposes it');
+  assert.match(readFileSync(cmd('distill.md'), 'utf8'), /brain_save_memories/);
+  assert.match(readFileSync(cmd('state.md'), 'utf8'), /brain_get_state[\s\S]*brain_save_state/);
   const files = promptFiles({ home: withOc }).filter(f => f.host === 'opencode');
-  assert.equal(files.length, 3);
+  assert.equal(files.length, 4, 'three commands + the plugin');
 });

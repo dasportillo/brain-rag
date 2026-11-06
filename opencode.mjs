@@ -8,7 +8,7 @@
 // aligned with the original), a tiny parser finds the byte ranges of `mcp` / `mcp.brain`, and only
 // those ranges are spliced. The result is re-parsed before it is returned — a splice that would
 // produce invalid config is refused, never written.
-import { existsSync, readFileSync, writeFileSync, copyFileSync, mkdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, copyFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -193,4 +193,54 @@ export function editOpencodeConfig(file, edit) {
   else mkdirSync(join(file, '..'), { recursive: true });
   writeFileSync(file, text);
   return { changed: true, file, backup };
+}
+
+// ---------------------------------------------------------------------------
+// AGENTS.md — opencode's global rules file
+// ---------------------------------------------------------------------------
+// opencode reads <config>/AGENTS.md into every session. A short section there is what makes the
+// model reach for the brain on its own (search before assuming, save what matters) — the same
+// role ~/.codex/AGENTS.md plays for Codex. brain-rag owns ONLY the text between its two markers:
+// the rest of the file is the user's, and install/uninstall never touch it.
+export const AGENTS_START = '<!-- brain-rag:agents:start — managed by brain-rag install; edits inside are overwritten -->';
+export const AGENTS_END = '<!-- brain-rag:agents:end -->';
+
+export const AGENTS_SECTION = `## Second brain (MCP server \`brain\`)
+Persistent memory of all my work across Claude Code, Codex and opencode. In opencode its tools are named \`brain_<tool>\`.
+- Starting work in a known repo, or "where did I leave off?" → \`brain_get_context\` (state + decisions + TODOs in one call).
+- "What did we decide about X?", "how did I solve Y?" → \`brain_search_context\`. Call it BEFORE assuming there is no prior context.
+- When this session produces something worth remembering (a decision with its why, a bug's root cause, a fix, a design) → \`brain_save_memories\` with self-contained memories. Skip trivial or throwaway chats.
+- Sessions are kept and indexed automatically by the brain-rag plugin; \`/brain\` forces it, \`/distill\` extracts memories now, \`/state\` refreshes the project's state note.`;
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const blockRe = () => new RegExp(`\\n*${escapeRe(AGENTS_START)}[\\s\\S]*?${escapeRe(AGENTS_END)}\\n?`);
+
+// Insert or replace the managed block. Returns { text, changed }.
+export function upsertAgentsBlock(text, section = AGENTS_SECTION) {
+  const before = String(text ?? '');
+  const block = `${AGENTS_START}\n${section}\n${AGENTS_END}\n`;
+  let out;
+  if (blockRe().test(before)) out = before.replace(blockRe(), (m) => (m.startsWith('\n') ? '\n\n' : '') + block);
+  else out = before.trim() ? `${before.replace(/\n*$/, '')}\n\n${block}` : block;
+  return { text: out, changed: out !== before };
+}
+
+// Remove the managed block (and the blank lines that separated it). Returns { text, changed }.
+export function removeAgentsBlock(text) {
+  const before = String(text ?? '');
+  if (!blockRe().test(before)) return { text: before, changed: false };
+  let out = before.replace(blockRe(), '\n');
+  out = out.trim() ? out.replace(/\n{3,}/g, '\n\n').replace(/\n*$/, '\n') : '';
+  return { text: out, changed: true };
+}
+
+// Apply to the real file: writes only on change; an AGENTS.md left empty by uninstall is removed.
+export function editAgentsFile(file, edit) {
+  const before = existsSync(file) ? readFileSync(file, 'utf8') : '';
+  const { text, changed } = edit(before);
+  if (!changed) return { changed: false, file };
+  if (!text) { rmSync(file, { force: true }); return { changed: true, file, removed: true }; }
+  mkdirSync(join(file, '..'), { recursive: true });
+  writeFileSync(file, text);
+  return { changed: true, file };
 }
