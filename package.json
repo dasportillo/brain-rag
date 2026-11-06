@@ -1,7 +1,7 @@
 {
   "name": "brain-rag",
   "version": "1.5.1",
-  "description": "Local, private RAG second brain over your Claude Code & Codex transcripts, served back to both agents as an MCP server.",
+  "description": "Local, private RAG second brain over your Claude Code, Codex & opencode transcripts, served back to all three agents as an MCP server.",
   "type": "module",
   "bin": {
     "brain-rag": "cli.mjs"
@@ -24,6 +24,7 @@
     "forget.mjs",
     "relabel.mjs",
     "transcripts.mjs",
+    "opencode.mjs",
     "search.mjs",
     "entities.mjs",
     "entities-cli.mjs",
@@ -59,6 +60,7 @@
     "mcp",
     "claude-code",
     "codex",
+    "opencode",
     "rag",
     "second-brain",
     "embeddings",

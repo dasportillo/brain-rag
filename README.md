@@ -11,7 +11,7 @@ Brain-RAG makes sure it never has to rediscover your project again.**
 [![node](https://img.shields.io/node/v/brain-rag?color=339933&logo=node.js&logoColor=white)](#installation)
 [![license](https://img.shields.io/npm/l/brain-rag?color=blue)](https://github.com/dasportillo/brain-rag/blob/main/LICENSE)
 [![privacy](https://img.shields.io/badge/privacy-100%25_local-success)](#-privacy)
-[![agents](https://img.shields.io/badge/works_with-Claude_Code_·_Codex_·_any_MCP_agent-8A2BE2)](#installation)
+[![agents](https://img.shields.io/badge/works_with-Claude_Code_·_Codex_·_opencode_·_any_MCP_agent-8A2BE2)](#installation)
 
 [Install](#installation) · [Quick start](#-quick-start) · [How it works](#%EF%B8%8F-architecture) · [Benchmarks](#-benchmarks) · [FAQ](#-faq)
 
@@ -53,7 +53,7 @@ Every day, AI coding agents start from zero:
 - ❓ Nobody remembers **why** a decision was made — only that the code looks like this
 - 📉 The context you build in every session — hundreds of hours of it — **evaporates**
 
-Here's the thing: **that context already exists.** Claude Code and Codex save every session as a transcript on your machine. Hundreds of conversations documenting every decision, every fix, every dead end — sitting in a folder, unused.
+Here's the thing: **that context already exists.** Claude Code, Codex and opencode save every session on your machine. Hundreds of conversations documenting every decision, every fix, every dead end — sitting in a folder, unused.
 
 Brain-RAG turns that archive into **long-term memory your agents actually use** — automatically, from any project, in any session, with any agent.
 
@@ -68,7 +68,7 @@ Brain-RAG turns that archive into **long-term memory your agents actually use** 
 | 📌 **Distilled memories, not just chat logs** | `/distill` turns a working session into typed knowledge: decisions, bug root causes, solutions, lessons. One claim per memory, the conclusion first, so a person opening it reads an answer and not a paragraph. Each memory keeps a link back to the exact conversation that produced it. |
 | 🕰️ **Knows what's current vs outdated** | Knowledge changes. When newer information supersedes older, your agent sees it flagged — it won't resurrect a plan you reverted two weeks ago. |
 | 📍 **"Where did I leave off?"** | A curated per-project state note — what's in flight, what's decided, what's blocked, what's next — ready the moment you ask. |
-| 🔀 **One memory, all your agents** | Claude Code and Codex share the same brain out of the box. Any MCP-compatible agent (Cursor, Windsurf, VS Code) can connect. Your memory belongs to **you**, not to a vendor. |
+| 🔀 **One memory, all your agents** | Claude Code, Codex and opencode share the same brain out of the box. Any MCP-compatible agent (Cursor, Windsurf, VS Code) can connect. Your memory belongs to **you**, not to a vendor. |
 | ⚡ **Instant recall** | Finds the right moment across tens of thousands of indexed conversation fragments in ~90 ms — including exact identifiers like error strings, function names, and ARNs. |
 | 🔒 **Local by default** | Local embedding model, local database, zero external API calls. Your conversations never leave your machine — the one exception is the optional **Brain Teams** sync, which shares only distilled memories, never raw transcripts. |
 | 🎛️ **Opt-in by default** | Nothing is saved unless you say so. One command opts a session in; everything else is forgotten. |
@@ -99,12 +99,12 @@ Requires **Node 22.5+**.
 npx -y brain-rag install
 ```
 
-That's it. The installer registers the memory server with **Claude Code** and **Codex** (if present), installs the `/brain`, `/state` and `/distill` commands in both, and prints the optional automation hooks.
+That's it. The installer registers the memory server with **Claude Code**, **Codex** and **opencode** (each one if present), installs the `/brain`, `/state` and `/distill` commands in all of them, and prints the optional automation hooks. For opencode it adds a `brain` entry under `mcp` in your global config (`~/.config/opencode/opencode.jsonc`, or `opencode.json`), editing it in place so your comments survive and leaving a `.bak-brain-rag` copy next to it.
 
 <details>
 <summary><b>Upgrading — the slash commands keep themselves current</b></summary>
 
-`/distill` is a **file** on disk (`~/.claude/commands/distill.md`, `~/.codex/prompts/distill.md`), written at install time. The extraction rules inside it change between versions, so a file left from an older install would keep filling your brain in the old format long after you upgraded.
+`/distill` is a **file** on disk (`~/.claude/commands/distill.md`, `~/.codex/prompts/distill.md`, `~/.config/opencode/commands/distill.md`), written at install time. The extraction rules inside it change between versions, so a file left from an older install would keep filling your brain in the old format long after you upgraded.
 
 It repairs itself. Every generated file is stamped with a hash of what Brain-RAG wrote, and the two things that already run on every session — the MCP server and the `mark-keep` SessionStart hook, both launched through `npx -y brain-rag` — rewrite any file the package has moved past. Nothing to remember, and it works under `npx` (an npm `postinstall` would not: `npx` never runs one).
 
@@ -135,6 +135,8 @@ or the equivalent in your client's MCP configuration. All tools (`search_context
 # just the memory server, no commands or hooks
 claude mcp add brain --scope user -- npx -y brain-rag serve
 codex mcp add brain -- npx -y brain-rag serve
+# opencode: under "mcp" in ~/.config/opencode/opencode.jsonc
+#   "brain": { "type": "local", "command": ["npx", "-y", "brain-rag", "serve"] }
 
 # from source
 git clone https://github.com/dasportillo/brain-rag.git && cd brain-rag && ./install.sh
@@ -174,7 +176,7 @@ Add to `~/.claude/settings.json` (the installer prints these ready to paste):
 "SessionEnd":   [{ "matcher": "", "hooks": [{ "type": "command", "command": "nohup npx -y brain-rag ingest >> \"$HOME/.claude/brain/ingest.log\" 2>&1 &", "timeout": 30 }] }]
 ```
 
-Then `BRAIN=1 claude` (or a `claude --brain` shell alias) starts a session that remembers itself, and every opted-in session is re-indexed automatically when it ends. Codex sessions ride the same ingest.
+Then `BRAIN=1 claude` (or a `claude --brain` shell alias) starts a session that remembers itself, and every opted-in session is re-indexed automatically when it ends. Codex and opencode sessions ride the same ingest: they have no session-end hook, so a session you mark with `/brain` there is indexed by the next ingest run (the Claude Code hook, or `npx -y brain-rag ingest`).
 
 **Auto-distill + team sync at session end** (optional, costs tokens): append a distill hook to the `SessionEnd` array — it turns each kept session into typed memories and, if you've run `brain-rag cloud login`, pushes them to your team in the same step:
 
@@ -193,12 +195,13 @@ Two layers, one principle: **raw history is never lost, distilled knowledge is n
 flowchart LR
     A["📜 Claude Code transcripts<br/>~/.claude/projects"] --> C
     B["📜 Codex rollouts<br/>~/.codex/sessions"] --> C
+    O["📜 opencode sessions<br/>~/.local/share/opencode/opencode.db"] --> C
     C["Ingest<br/><i>opt-in · redact secrets · index</i>"] --> D[("🧠 brain.db<br/><i>one local file</i>")]
     D --> E["Layer 1 · Raw archive<br/><i>every conversation, searchable</i>"]
     D --> F["Layer 2 · Distilled memories<br/><i>decisions · bugs · solutions<br/>+ provenance + lifecycle</i>"]
     E --> G["MCP server"]
     F --> G
-    G --> H["🤖 Claude Code · Codex · Cursor ·<br/>any MCP agent, in any project"]
+    G --> H["🤖 Claude Code · Codex · opencode ·<br/>Cursor · any MCP agent, in any project"]
 ```
 
 - **Layer 1 — the archive.** Every opted-in conversation, chunked and indexed. Immutable, complete, the source of truth.
@@ -293,7 +296,7 @@ Brain-RAG is evolving from *searchable history* into a full **long-term memory s
 
 - ✅ Hybrid retrieval (semantic + exact-term + recency), measured by a growing eval suite
 - ✅ Layer 2: distilled, typed memories with provenance and temporal lifecycle
-- ✅ Multi-agent: Claude Code + Codex sharing one brain
+- ✅ Multi-agent: Claude Code + Codex + opencode sharing one brain
 - ✅ Team ramp-up: `brain-rag onboard` turns a developer's existing history into team memory; `brain-rag consolidate` judges the near-duplicates bulk distillation leaves behind (merge / supersede / close resolved TODOs — nothing deleted)
 - ✅ Memories written for a reader: one claim each, the conclusion first, a title that is a claim and not a summary — every new memory is distilled to that shape, by `/distill` and by the headless extractor alike
 - 🔜 Automatic distillation at session end — knowledge extraction with zero manual steps

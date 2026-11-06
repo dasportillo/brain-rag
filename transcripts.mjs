@@ -1,15 +1,20 @@
 // Parse, chunk, and redact session transcripts from every registered host adapter:
 //   - claude-code: Claude Code project transcripts (~/.claude/projects/**/*.jsonl)
 //   - codex:       Codex session rollouts          (~/.codex/sessions/**/rollout-*.jsonl)
+//   - opencode:    opencode sessions               (~/.local/share/opencode/opencode.db, SQLite)
 // Every adapter normalizes to the same { turns, title, cwd } shape, so everything downstream
-// (chunking, redaction, embeddings, store) is host-agnostic. Adding a third agent = one
+// (chunking, redaction, embeddings, store) is host-agnostic. Adding another agent = one
 // registerAdapter() call (see ADAPTERS below and docs/ADAPTERS.md) — no dispatch code changes.
+import './quiet.mjs'; // the opencode adapter reads SQLite: silence node:sqlite's ExperimentalWarning
 import { readFileSync, existsSync, readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { dirname, basename, join } from 'node:path';
 import { homedir } from 'node:os';
 
 export const CLAUDE_PROJECTS = join(homedir(), '.claude', 'projects');
 export const CODEX_SESSIONS = join(homedir(), '.codex', 'sessions');
+// opencode keeps every session in one SQLite file under its XDG data dir.
+export const OPENCODE_DB = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'opencode', 'opencode.db');
 
 // FALLBACK project name, from the dashified directory Claude Code uses:
 //   /Users/x/.claude/projects/-Users-you-project-my-project/<sess>.jsonl
@@ -95,7 +100,7 @@ export function redact(text) {
 function toolAction(block) {
   const name = block.name || 'tool';
   const inp = block.input || {};
-  const desc = inp.command || inp.cmd || inp.file_path || inp.path || inp.pattern || inp.url || inp.query || inp.description || '';
+  const desc = inp.command || inp.cmd || inp.file_path || inp.filePath || inp.path || inp.pattern || inp.url || inp.query || inp.description || '';
   const d = String(desc).replace(/\s+/g, ' ').trim().slice(0, 100);
   return d ? `${name}: ${d}` : name;
 }
@@ -211,10 +216,12 @@ export function headCwd(filePath, n = 2048) {
 export const codexHeadCwd = (filePath) => headCwd(filePath);
 
 // Cheap project label for a transcript — the same rule ingest applies after a full parse
-// (git repo of the cwd, else the dashified path), fed from the file head. Lets discovery over
-// hundreds of transcripts (onboard, import) group by project without parsing any of them.
+// (git repo of the cwd, else the dashified path), fed from the file head (or the adapter's own
+// cheap cwd lookup). Lets discovery over hundreds of transcripts (onboard, import) group by
+// project without parsing any of them.
 export function sessionProject(filePath) {
-  const cwd = headCwd(filePath, 16384);
+  const a = adapterFor(filePath);
+  const cwd = a?.cwdOf ? a.cwdOf(filePath) : headCwd(filePath, 16384);
   return (cwd && gitRootName(cwd)) || projectFromPath(filePath);
 }
 
@@ -267,19 +274,198 @@ export function parseCodexRollout(filePath) {
 }
 
 // ---------------------------------------------------------------------------
+// opencode sessions (~/.local/share/opencode/opencode.db — SQLite, opencode ≥ 1.x)
+// ---------------------------------------------------------------------------
+// opencode has no per-session file: every session lives in one SQLite database (tables
+// `session`, `message`, `part`). Everything else in brain-rag is keyed by a transcript PATH
+// (keep.list, sessions.path, chunks.path), so each session gets a stable virtual path:
+//   <opencode.db>#<session id>      e.g. /Users/me/.local/share/opencode/opencode.db#ses_f502…
+// The database is only ever opened READ-ONLY; opencode keeps writing to it while we read (WAL).
+
+export const opencodePath = (dbPath, sessionId) => `${dbPath}#${sessionId}`;
+export function splitOpencodePath(p) {
+  const m = String(p).match(/^(.*\.db)#(ses_[A-Za-z0-9]+)$/);
+  return m ? { dbPath: m[1], sessionId: m[2] } : null;
+}
+export const isOpencodePath = (p) => splitOpencodePath(p) !== null;
+
+const opencodeDbs = new Map(); // dbPath -> DatabaseSync (read-only), one per process
+function openOpencodeDb(dbPath) {
+  let db = opencodeDbs.get(dbPath);
+  if (!db) {
+    // getBuiltinModule = a synchronous, lazy load: hosts that never touch opencode never load SQLite here.
+    const { DatabaseSync } = process.getBuiltinModule('node:sqlite');
+    db = new DatabaseSync(dbPath, { readOnly: true, timeout: 5000 });
+    opencodeDbs.set(dbPath, db);
+  }
+  return db;
+}
+
+// Per-session metadata from the latest listing: { cwd, parentId, mtimeMs, size }. list()
+// refreshes it on every call (the MCP server is long-lived; a stale cache would hide new
+// sessions), and stat/cwd fall back to a direct query for a path the listing hasn't seen.
+const opencodeMeta = new Map();
+
+// mtime = the newest write anywhere in the session (session row, messages or parts); size = the
+// bytes of its message + part payloads. Together they play the (mtime, bytes) role a transcript
+// file's stat plays for ingest's "unchanged → skip" check.
+const OPENCODE_META_SQL = `
+  SELECT s.id, s.directory, s.parent_id,
+    MAX(s.time_updated,
+        COALESCE((SELECT MAX(time_updated) FROM message m WHERE m.session_id = s.id), 0),
+        COALESCE((SELECT MAX(time_updated) FROM part p WHERE p.session_id = s.id), 0)) AS mtime,
+    COALESCE((SELECT SUM(LENGTH(data)) FROM message m WHERE m.session_id = s.id), 0)
+      + COALESCE((SELECT SUM(LENGTH(data)) FROM part p WHERE p.session_id = s.id), 0) AS size
+  FROM session s`;
+
+const toMeta = (r) => ({ cwd: r.directory ?? null, parentId: r.parent_id ?? null, mtimeMs: Number(r.mtime) || 0, size: Number(r.size) || 0 });
+
+export function listOpencodeSessions(dbPath = OPENCODE_DB) {
+  if (!existsSync(dbPath)) return [];
+  let rows;
+  try { rows = openOpencodeDb(dbPath).prepare(OPENCODE_META_SQL).all(); }
+  catch { return []; } // not an opencode DB we understand (older/newer schema): index nothing rather than guess
+  return rows.map(r => {
+    const p = opencodePath(dbPath, r.id);
+    opencodeMeta.set(p, toMeta(r));
+    return p;
+  });
+}
+
+function opencodeSessionMeta(p) {
+  const hit = opencodeMeta.get(p);
+  if (hit) return hit;
+  const ref = splitOpencodePath(p);
+  if (!ref || !existsSync(ref.dbPath)) return null;
+  try {
+    const r = openOpencodeDb(ref.dbPath).prepare(`${OPENCODE_META_SQL} WHERE s.id = ?`).get(ref.sessionId);
+    if (!r) return null;
+    const meta = toMeta(r);
+    opencodeMeta.set(p, meta);
+    return meta;
+  } catch { return null; }
+}
+
+// opencode's placeholder titles carry no meaning ("New session - 2026-09-17T13:51:50.321Z").
+const placeholderTitle = (t) => !t || /^(New|Child) session - \d{4}-\d{2}-\d{2}T/.test(t);
+const jsonOr = (s, d) => { try { return JSON.parse(s); } catch { return d; } };
+const isoOf = (ms) => (Number.isFinite(ms) && ms > 0 ? new Date(ms).toISOString() : null);
+
+// opencode counterpart of parseTranscript — same { turns, title, cwd } shape.
+//   user messages      → their text parts, minus synthetic/ignored ones (harness-injected: the
+//                        "Continue if you have next steps…" nudge after a compaction, tool echoes)
+//   assistant messages → their text parts; a compaction run (summary:true / mode:'compaction')
+//                        becomes role 'summary', like Claude's isCompactSummary turns
+//   tool parts         → the per-session actions trace (same "Tool: <command|file|…>" style)
+// Reasoning, step-start/step-finish, patch and file parts are dropped.
+export function parseOpencodeSession(p) {
+  const ref = splitOpencodePath(p);
+  const empty = { turns: [], title: null, cwd: null };
+  if (!ref || !existsSync(ref.dbPath)) return empty;
+  const db = openOpencodeDb(ref.dbPath);
+  const s = db.prepare('SELECT title, directory FROM session WHERE id = ?').get(ref.sessionId);
+  if (!s) return empty;
+
+  const msgs = db.prepare('SELECT id, time_created, data FROM message WHERE session_id = ? ORDER BY time_created, id').all(ref.sessionId);
+  const partsByMsg = new Map();
+  for (const row of db.prepare('SELECT message_id, data FROM part WHERE session_id = ? ORDER BY message_id, id').all(ref.sessionId)) {
+    const part = jsonOr(row.data, null);
+    if (!part) continue;
+    if (!partsByMsg.has(row.message_id)) partsByMsg.set(row.message_id, []);
+    partsByMsg.get(row.message_id).push(part);
+  }
+
+  const turns = [];
+  const actions = [];
+  const seenAction = new Set();
+  let lastTs = null;
+  const session = ref.sessionId;
+
+  for (const m of msgs) {
+    const info = jsonOr(m.data, {});
+    const ts = isoOf(info.time?.created ?? Number(m.time_created));
+    if (ts) lastTs = ts;
+    const parts = partsByMsg.get(m.id) ?? [];
+    const text = parts
+      .filter(pt => pt.type === 'text' && pt.text && !pt.synthetic && !pt.ignored)
+      .map(pt => pt.text).join('\n').trim();
+
+    if (info.role === 'user') {
+      if (text && !isNoise(text)) turns.push({ role: 'user', text, ts, session });
+    } else if (info.role === 'assistant') {
+      if (text) {
+        const role = (info.summary === true || info.mode === 'compaction') ? 'summary' : 'assistant';
+        turns.push({ role, text, ts, session });
+      }
+      for (const pt of parts) {
+        if (pt.type !== 'tool' || !pt.tool) continue;
+        // opencode's built-in tools are lowercase (bash, read, edit); capitalize so the trace reads
+        // like the other hosts' ("Bash: …") and an actions search matches across all of them.
+        const name = pt.tool.charAt(0).toUpperCase() + pt.tool.slice(1);
+        const a = toolAction({ name, input: pt.state?.input });
+        if (!seenAction.has(a)) { seenAction.add(a); actions.push(a); }
+      }
+    }
+  }
+  if (actions.length) {
+    turns.push({ role: 'actions', text: 'Actions taken in this session:\n' + actions.slice(0, 100).join('\n'), ts: lastTs, session });
+  }
+  return { turns, title: placeholderTitle(s.title) ? null : s.title.trim(), cwd: s.directory ?? null };
+}
+
+// ---------------------------------------------------------------------------
+// Which host launched THIS process?
+// ---------------------------------------------------------------------------
+// keep_session / /brain must mark the session of the agent that called them — not just the newest
+// transcript in the cwd, which may belong to another agent running in parallel on the same repo.
+// opencode exports OPENCODE_PID to its MCP servers; checking it is an ANCESTOR (not just present)
+// keeps a Claude session started from an opencode terminal — which inherits the variable — honest.
+// Claude Code exports CLAUDECODE=1 to its MCP servers (no pid), so it is the weaker signal.
+export function isAncestorPid(pid, { start = process.pid, ppidOf = defaultPpidOf, maxDepth = 12 } = {}) {
+  const target = Number(pid);
+  if (!Number.isInteger(target) || target <= 1) return false;
+  let cur = start;
+  for (let i = 0; i < maxDepth && cur > 1; i++) {
+    const parent = ppidOf(cur);
+    if (!parent) return false;
+    if (parent === target) return true;
+    cur = parent;
+  }
+  return false;
+}
+function defaultPpidOf(pid) {
+  if (process.platform === 'win32') return null;
+  if (pid === process.pid) return process.ppid;
+  try { return Number(execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()) || null; }
+  catch { return null; }
+}
+
+export function hostAdapterName(env = process.env, { isAncestor = isAncestorPid } = {}) {
+  if (env.OPENCODE_PID && isAncestor(env.OPENCODE_PID)) return 'opencode';
+  if (env.CLAUDECODE === '1') return 'claude-code';
+  return null; // Codex exports nothing identifying: fall back to recency across every store
+}
+
+// ---------------------------------------------------------------------------
 // Adapter registry — the ONE place that knows which agents write transcripts.
 // ---------------------------------------------------------------------------
 // An adapter describes one agent's session store:
-//   name                    — stable id ('claude-code', 'codex', …)
-//   root                    — absolute dir the agent writes sessions under
-//   detect(filePath)        — cheap format sniff (path or file head; never a full parse)
-//   parse(filePath)         — normalize to { turns, title, cwd }
-//   currentSessionCwdMatch(filePath, cwd, root) — does this file belong to a session
-//     launched from `cwd`? (root is passed so tests can re-root an adapter)
+//   name                    — stable id ('claude-code', 'codex', 'opencode', …)
+//   root                    — where the agent writes sessions (a dir of .jsonl, or a DB file)
+//   detect(path)            — cheap format sniff (path or file head; never a full parse)
+//   parse(path)             — normalize to { turns, title, cwd }
+//   currentSessionCwdMatch(path, cwd, root) — does this session belong to one launched from
+//     `cwd`? (root is passed so tests can re-root an adapter)
 //   probeCap (optional)     — when the cwd match costs I/O (reads the file head), only the
 //     newest N files are probed in findCurrentTranscript; omit for pure-string matches.
-// Everything generic (dispatch, discovery, current-session lookup) iterates ADAPTERS, so a
-// third agent is one registerAdapter() call — see docs/ADAPTERS.md for the recipe.
+// Optional, for stores that are NOT one .jsonl file per session (opencode: one SQLite DB):
+//   list(root)              — every session path in the store (default: walkJsonl(root))
+//   stat(path)              — { mtimeMs, size } of a session (default: fs.statSync)
+//   exists(path)            — is the session still there? (default: fs.existsSync)
+//   cwdOf(path)             — the session's cwd without a full parse (default: the file head)
+//   current: false          — skip a session in findCurrentTranscript (e.g. a subagent child)
+// Everything generic (dispatch, discovery, current-session lookup) iterates ADAPTERS, so another
+// agent is one registerAdapter() call — see docs/ADAPTERS.md for the recipe.
 export const ADAPTERS = [];
 export function registerAdapter(adapter) {
   ADAPTERS.push(adapter);
@@ -289,8 +475,34 @@ export function registerAdapter(adapter) {
 // Claude Code nests transcripts under the cwd with '/' and '_' replaced by '-'.
 const dashify = (cwd) => String(cwd).replace(/[/_]/g, '-');
 
-// Detection order = specificity: codex first (its first line IS a definitive marker), then
-// claude-code (per-line session fields — also parseSession's fallback, so a miss is harmless).
+// Detection order = specificity: opencode first (its virtual path is a pure-string marker, and it
+// must win before any adapter tries to open "<db>#<id>" as a file), then codex (its first line IS
+// a definitive marker), then claude-code (per-line session fields — also parseSession's fallback,
+// so a miss is harmless).
+registerAdapter({
+  name: 'opencode',
+  root: OPENCODE_DB,
+  detect: isOpencodePath,
+  parse: parseOpencodeSession,
+  list: (root) => listOpencodeSessions(root),
+  stat: (p) => {
+    const m = opencodeSessionMeta(p);
+    if (!m) throw Object.assign(new Error(`opencode session not found: ${p}`), { code: 'ENOENT' });
+    return { mtimeMs: m.mtimeMs, size: m.size };
+  },
+  exists: (p) => {
+    const ref = splitOpencodePath(p);
+    if (!ref || !existsSync(ref.dbPath)) return false;
+    try { return !!openOpencodeDb(ref.dbPath).prepare('SELECT 1 FROM session WHERE id = ?').get(ref.sessionId); }
+    catch { return true; } // DB busy/unreadable right now: never report "gone" (ingest would prune it)
+  },
+  cwdOf: (p) => opencodeSessionMeta(p)?.cwd ?? null,
+  // A child session is a subagent run (opencode's task tool), never the conversation the user is in.
+  currentSessionCwdMatch: (p, cwd) => {
+    const m = opencodeSessionMeta(p);
+    return !!m && !m.parentId && m.cwd === cwd;
+  },
+});
 registerAdapter({
   name: 'codex',
   root: CODEX_SESSIONS,
@@ -310,11 +522,41 @@ registerAdapter({
     filePath.startsWith(join(root, dashify(cwd)) + '/'),
 });
 
+// The adapter that owns a path, or null. A detect that throws (a .jsonl deleted since it was
+// listed) counts as "not mine" — callers fall back to the plain-file defaults.
+export function adapterFor(p) {
+  for (const a of ADAPTERS) {
+    try { if (a.detect(p)) return a; } catch { /* unreadable: not this adapter */ }
+  }
+  return null;
+}
+
 // One entry point for every format: registry lookup via detect. Undetected files get the
 // claude-code parser — the historical default, and harmless on foreign .jsonl (yields no turns).
 export function parseSession(filePath) {
-  const adapter = ADAPTERS.find(a => a.detect(filePath));
+  const adapter = adapterFor(filePath);
   return adapter ? adapter.parse(filePath) : parseTranscript(filePath);
+}
+
+// Every session path across every adapter's store (absent stores contribute nothing).
+export function listSessions(adapters = ADAPTERS) {
+  return adapters.flatMap(a => (a.list ? a.list(a.root) : walkJsonl(a.root)));
+}
+// { mtimeMs, size } of any session path — a file's stat, or the adapter's equivalent.
+export function sessionStat(p) {
+  const a = adapterFor(p);
+  return a?.stat ? a.stat(p) : statSync(p);
+}
+// Is the session still in its store? (ingest prunes the index entries of the ones that aren't)
+export function sessionExists(p) {
+  const a = isOpencodePath(p) ? adapterFor(p) : null; // plain files never need a detect probe
+  return a?.exists ? a.exists(p) : existsSync(p);
+}
+// The session id a path stands for — what memories record as source_session. Claude names its
+// transcripts <sessionId>.jsonl; opencode's virtual path carries the id after the '#'.
+export function sessionRefOf(p) {
+  const oc = splitOpencodePath(p);
+  return oc ? oc.sessionId : basename(String(p), '.jsonl');
 }
 
 // All .jsonl transcripts under a root (any adapter's store); [] when the root doesn't exist.
@@ -326,39 +568,51 @@ export function walkJsonl(dir) {
   });
 }
 
-// The transcript being written RIGHT NOW: the newest .jsonl across every adapter's store,
+// The transcript being written RIGHT NOW: the newest session across every adapter's store,
 // preferring candidates that belong to this cwd so a busy parallel session in another
-// project doesn't steal the match. Used by keep_session and mark-current.
-// { claudeRoot, codexRoot } re-root the two built-in adapters (the historical test surface).
-export function findCurrentTranscript(cwd, { claudeRoot = CLAUDE_PROJECTS, codexRoot = CODEX_SESSIONS } = {}) {
-  const overrides = { 'claude-code': claudeRoot, codex: codexRoot };
-  const all = [], matched = [];
+// project doesn't steal the match — and, when the launching agent is known (hostAdapterName),
+// candidates from THAT agent, so a parallel session of another agent on the same repo doesn't
+// steal it either. Used by keep_session and mark-current.
+// { claudeRoot, codexRoot, opencodeRoot } re-root the built-in adapters (the test surface);
+// `host` overrides the detected launching agent (null = recency across every store).
+export function findCurrentTranscript(cwd, {
+  claudeRoot = CLAUDE_PROJECTS, codexRoot = CODEX_SESSIONS, opencodeRoot = OPENCODE_DB,
+  host = hostAdapterName(),
+} = {}) {
+  const overrides = { 'claude-code': claudeRoot, codex: codexRoot, opencode: opencodeRoot };
+  const all = [], matched = [], hostMatched = [];
+  const mtime = new Map();
   for (const a of ADAPTERS) {
     const root = overrides[a.name] ?? a.root;
-    const files = walkJsonl(root);
+    const files = a.list ? a.list(root) : walkJsonl(root);
+    const statOf = (f) => (a.stat ? a.stat(f) : statSync(f)).mtimeMs;
+    for (const f of files) mtime.set(f, statOf(f));
     all.push(...files);
     // Cap-aware probe: when the cwd match reads the file (probeCap set), only the newest
     // probeCap files are checked; pure-string matches check everything.
     let probe = files;
     const cap = a.probeCap ?? Infinity;
     if (files.length > cap) {
-      probe = files.map(f => ({ f, m: statSync(f).mtimeMs }))
-        .sort((x, y) => y.m - x.m).slice(0, cap).map(x => x.f);
+      probe = [...files].sort((x, y) => mtime.get(y) - mtime.get(x)).slice(0, cap);
     }
-    for (const f of probe) if (a.currentSessionCwdMatch(f, cwd, root)) matched.push(f);
+    for (const f of probe) {
+      if (!a.currentSessionCwdMatch(f, cwd, root)) continue;
+      matched.push(f);
+      if (a.name === host) hostMatched.push(f);
+    }
   }
   const newest = (files) => {
     let best = null, bestM = -1;
     for (const f of files) {
-      const m = statSync(f).mtimeMs;
+      const m = mtime.get(f);
       if (m > bestM) { bestM = m; best = f; }
     }
     return best;
   };
-  // Prefer transcripts that provably belong to this cwd; only when NO store can be matched
-  // (e.g. the MCP server was launched with an unrelated cwd) fall back to pure recency
-  // across everything. Null when no store has transcripts at all.
-  return newest(matched) ?? newest(all);
+  // Most specific first: this agent + this cwd; then any agent in this cwd; only when NO store
+  // can be matched (e.g. the MCP server was launched with an unrelated cwd) fall back to pure
+  // recency across everything. Null when no store has transcripts at all.
+  return newest(hostMatched) ?? newest(matched) ?? newest(all);
 }
 
 // Splits a long text into ~size-char windows with overlap.

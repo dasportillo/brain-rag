@@ -1,9 +1,9 @@
 // Mark the CURRENT session to be SAVED to the brain (opt-in): appends its transcript
 // to keep.list so ingest.mjs will index it. Saves the full session.
 //
-// Used by the /brain slash command (Claude Code) and the /brain custom prompt (Codex).
-// The current session = the most recently modified transcript across BOTH hosts' stores,
-// preferring the ones that belong to this cwd (see findCurrentTranscript).
+// Used by the /brain slash command (Claude Code). Codex and opencode call the keep_session MCP
+// tool instead. The current session = the most recently modified transcript across every host's
+// store, preferring the launching agent and this cwd (see findCurrentTranscript).
 //
 // Usage:
 //   node mark-current-keep.mjs         # mark to save

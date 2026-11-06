@@ -6,6 +6,7 @@
 import { execSync } from 'node:child_process';
 import { rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { opencodeConfigDir, opencodeConfigFile, removeBrainMcp, editOpencodeConfig } from './opencode.mjs';
 import { homedir } from 'node:os';
 
 const PURGE = process.argv.includes('--purge');
@@ -30,12 +31,26 @@ try {
   console.log("▸ Codex MCP 'brain' not registered (or 'codex' CLI unavailable) — nothing to remove");
 }
 
+// 1c. opencode: drop the 'brain' entry from its global config (comments preserved, backup kept).
+const OPENCODE_DIR = opencodeConfigDir();
+if (existsSync(OPENCODE_DIR)) {
+  const file = opencodeConfigFile(OPENCODE_DIR);
+  try {
+    const r = editOpencodeConfig(file, removeBrainMcp);
+    console.log(r.changed ? `▸ removed opencode MCP server 'brain' from ${file}` : "▸ opencode MCP 'brain' not registered — nothing to remove");
+  } catch (e) {
+    console.log(`▸ could not edit ${file} (${e.message}) — remove "mcp" → "brain" yourself`);
+  }
+}
+
 // 2. Remove the slash commands / custom prompts we installed. A `<file>.bak` left by a prompt
 // refresh is NOT removed: that copy exists because the text was yours, not ours.
 for (const p of [
   join(CMD_DIR, 'brain.md'), join(CMD_DIR, 'state.md'), join(CMD_DIR, 'distill.md'),
   join(homedir(), '.codex', 'prompts', 'brain.md'), join(homedir(), '.codex', 'prompts', 'state.md'),
   join(homedir(), '.codex', 'prompts', 'distill.md'),
+  join(OPENCODE_DIR, 'commands', 'brain.md'), join(OPENCODE_DIR, 'commands', 'state.md'),
+  join(OPENCODE_DIR, 'commands', 'distill.md'),
 ]) {
   if (existsSync(p)) { rmSync(p); console.log(`▸ removed ${p}`); }
   if (existsSync(p + '.bak')) console.log(`▸ kept your ${p}.bak (delete it yourself if you don't want it)`);

@@ -3,15 +3,16 @@
 `brain-rag` indexes session transcripts through a small **adapter registry**
 (`transcripts.mjs::ADAPTERS`). Everything generic — format dispatch (`parseSession`), discovery
 (`ingest`/`import` walking session stores), and current-session lookup (`findCurrentTranscript`,
-behind `keep_session` and `/brain`) — iterates the registry. So supporting a third agent is one
+behind `keep_session` and `/brain`) — iterates the registry. So supporting another agent is one
 `registerAdapter()` call plus a parser; no dispatch code changes anywhere.
 
-Two adapters ship today, because those are the two formats we can verify against real data:
+Three adapters ship today, because those are the formats we can verify against real data:
 
 | name | root | format marker |
 |---|---|---|
-| `claude-code` | `~/.claude/projects/**/*.jsonl` | per-line `sessionId`/`parentUuid` fields |
+| `opencode` | `~/.local/share/opencode/opencode.db` (SQLite) | virtual path `<db>#ses_<id>` |
 | `codex` | `~/.codex/sessions/**/rollout-*.jsonl` | first line is a `session_meta` object |
+| `claude-code` | `~/.claude/projects/**/*.jsonl` | per-line `sessionId`/`parentUuid` fields |
 
 There is deliberately **no** Cursor/Windsurf/etc. adapter yet: a parser written from format
 descriptions instead of real session files silently mis-indexes (wrong roles, un-dropped harness
@@ -30,6 +31,11 @@ registerAdapter({
   parse(filePath)  { /* → { turns, title, cwd } */ },
   currentSessionCwdMatch(filePath, cwd, root) { /* does this file belong to a session from cwd? */ },
   probeCap: 200,                          // only if the cwd match reads the file (I/O) — see below
+  // Optional — only for a store that is NOT one .jsonl file per session (see the opencode adapter):
+  list(root)   { /* every session path in the store (default: walk root for .jsonl) */ },
+  stat(path)   { /* { mtimeMs, size } (default: fs.statSync) */ },
+  exists(path) { /* still in the store? (default: fs.existsSync) — ingest prunes the rest */ },
+  cwdOf(path)  { /* cwd without a full parse (default: read it from the file head) */ },
 });
 ```
 
@@ -101,6 +107,35 @@ but realistic rollout (meta line, harness noise, real turns, UI duplicates, tool
 compaction recap) taken from real sessions. Build the same for your format and assert the
 parsed roles/noise-drops — the suite is dependency-free (`npm test`, no model download).
 
+## Worked example: the opencode adapter — a store that isn't files
+
+opencode (1.x) keeps every session in ONE SQLite database (`session`, `message`, `part` tables),
+so there is no per-session file for keep.list, `sessions.path` or ingest's change check to key on.
+The adapter gives each session a **virtual path**, `<opencode.db>#<session id>`, and implements
+the optional `list` / `stat` / `exists` / `cwdOf` hooks so every generic caller (ingest, import,
+onboard, relabel, forget, `findCurrentTranscript`) keeps working by path, unchanged.
+
+- **Detect** is a pure string match on that path, and the adapter is registered FIRST so no file
+  adapter ever tries to open `"<db>#<id>"`.
+- **stat** = (newest `time_updated` across the session, its messages and parts; total payload
+  bytes) — the (mtime, bytes) pair ingest compares to skip unchanged sessions.
+- **Parse**: user `text` parts minus `synthetic`/`ignored` ones (the post-compaction "Continue if
+  you have next steps…" nudge, user-run tool echoes); assistant `text` parts; assistant messages
+  with `summary: true` / `mode: "compaction"` → `role: "summary"`; `tool` parts → the actions trace
+  (tool names capitalized: `bash` → `Bash: …`). `reasoning`, `step-*`, `patch` and `file` parts are
+  dropped. Placeholder titles (`New session - <iso>`) become `null`.
+- **Current session**: child sessions (`parent_id`, opencode's subagent runs) never match. The
+  database is opened read-only; opencode keeps writing to it (WAL) while we read.
+
+**Which agent is asking?** `findCurrentTranscript` prefers the store of the agent that launched
+the MCP server, so `keep_session` from opencode never marks a parallel Claude Code session in the
+same repo (and vice versa). opencode exports `OPENCODE_PID` to its MCP servers — trusted only when
+that pid is an ancestor of the server process; Claude Code exports `CLAUDECODE=1`. Codex exports
+nothing identifying, so it keeps the cwd-scoped recency rule.
+
+Out of scope: opencode's pre-SQLite layout (`storage/` with one JSON file per message) and the
+`session_message` table, which was empty in every database we could inspect.
+
 ## Any MCP client (Cursor, Windsurf, VS Code, …)
 
 The two halves of brain-rag are independent, and only one of them needs an adapter:
@@ -108,10 +143,10 @@ The two halves of brain-rag are independent, and only one of them needs an adapt
 - **Reading and writing the brain over MCP works from any client today.** The server is plain
   stdio MCP; every tool — `search_context`, `get_state`, `save_state`, `save_memories`,
   `list_projects` — behaves identically regardless of which editor is asking. Your Cursor
-  session can search the history of your Claude Code and Codex work right now.
+  session can search the history of your Claude Code, Codex and opencode work right now.
 - **Indexing that agent's own transcripts needs an adapter.** Without one, ingest never sees the
   agent's session files, and `keep_session` / `/brain` (which mark "the transcript being written
-  right now") can only match Claude Code/Codex transcripts — so conversations held *in* that
+  right now") can only match Claude Code/Codex/opencode sessions — so conversations held *in* that
   client aren't remembered until its adapter exists.
 
 Generic config, pointing at the published package (no install step — `npx` fetches it):

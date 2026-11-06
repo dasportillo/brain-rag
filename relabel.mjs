@@ -7,10 +7,8 @@
 // source_session = session id or transcript basename, the two keys distill/MCP write), so
 // get_context(<repo>) and consolidate --project <repo> see them. Entity mentions are left as-is
 // (joins drop the project mismatch naturally; only bare counts drift).
-import { existsSync } from 'node:fs';
-import { basename } from 'node:path';
 import { openDb } from './store.mjs';
-import { parseSession, projectFromPath, gitRootName } from './transcripts.mjs';
+import { parseSession, projectFromPath, gitRootName, sessionExists, sessionRefOf } from './transcripts.mjs';
 
 const DRY = process.argv.includes('--dry');
 const db = openDb();
@@ -25,14 +23,14 @@ let changed = 0, missing = 0, movedMemories = 0;
 const moves = new Map(); // "old → new" -> session count
 
 for (const { path, project, session } of sessions) {
-  if (!existsSync(path)) { missing++; continue; } // transcript gone; leave as-is (ingest prunes it)
+  if (!sessionExists(path)) { missing++; continue; } // transcript gone; leave as-is (ingest prunes it)
   const { cwd } = parseSession(path);
   const next = (cwd && gitRootName(cwd)) || projectFromPath(path);
   if (!next || next === project) continue;
   const key = `${project}  →  ${next}`;
   moves.set(key, (moves.get(key) || 0) + 1);
   changed++;
-  const refs = [session ?? basename(path, '.jsonl'), basename(path, '.jsonl')];
+  const refs = [session ?? sessionRefOf(path), sessionRefOf(path)];
   movedMemories += cntMemories.get(...refs, project).n;
   if (!DRY) {
     db.exec('BEGIN');

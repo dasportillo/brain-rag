@@ -1,4 +1,4 @@
-// Wire the published package into Claude Code (and Codex, when present) — npx-native: no code is
+// Wire the published package into Claude Code (and Codex / opencode, when present) — npx-native: no code is
 // copied anywhere, the MCP server and hooks run straight from the npm package. Only DATA (the
 // index + state notes) lives under BRAIN_DIR (~/.claude/brain).
 // Run with: npx -y <pkg> install  (or `brain-rag install`).
@@ -10,6 +10,8 @@ import { homedir } from 'node:os';
 // same module refreshes them from `serve` / the SessionStart hook when a later version changes
 // them, so /distill can never keep running last year's rules).
 import { syncPrompts } from './prompts.mjs';
+import { opencodeConfigDir, opencodeConfigFile, addBrainMcp, brainEntry, editOpencodeConfig } from './opencode.mjs';
+import { OPENCODE_DB } from './transcripts.mjs';
 
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
 const NAME = pkg.name;                 // e.g. brain-rag
@@ -17,6 +19,9 @@ const NPX = `npx -y ${NAME}`;
 const BRAIN_DIR = process.env.BRAIN_DIR || join(homedir(), '.claude', 'brain');
 const CMD_DIR = join(homedir(), '.claude', 'commands');
 const CODEX_HOME = join(homedir(), '.codex');
+const OPENCODE_DIR = opencodeConfigDir();
+// opencode counts as installed when it has a config dir or has written sessions.
+const HAS_OPENCODE = existsSync(OPENCODE_DIR) || existsSync(OPENCODE_DB);
 
 console.log(`▸ ${NAME} install (npx-native)\n  data dir: ${BRAIN_DIR}`);
 mkdirSync(BRAIN_DIR, { recursive: true });
@@ -65,6 +70,28 @@ if (existsSync(CODEX_HOME)) {
   (the Claude Code SessionEnd hook, or run '${NPX} ingest' manually / on a schedule).`);
 }
 
+// 1c. opencode — third host (only when opencode is on this machine). Its sessions are read straight
+// from its SQLite store; registering the server + commands gives it the same tools. opencode has no
+// non-interactive `mcp add`, so the global config is edited in place — comments preserved, a
+// backup written next to it, and nothing touched when a 'brain' entry already exists.
+if (HAS_OPENCODE) {
+  const file = opencodeConfigFile(OPENCODE_DIR);
+  try {
+    const r = editOpencodeConfig(file, (text) => addBrainMcp(text, brainEntry(NAME)));
+    if (r.changed) console.log(`▸ registered MCP 'brain' in opencode → ${file}${r.backup ? ` (previous version: ${r.backup})` : ''}`);
+    else console.log(`▸ opencode MCP 'brain' already registered in ${file} — skipping`);
+  } catch (e) {
+    console.log(`▸ could not edit ${file} (${e.message}) — add this under "mcp" yourself:\n    "brain": ${JSON.stringify(brainEntry(NAME))}`);
+  }
+  console.log(`
+▸ opencode tip — add a short section to ${join(OPENCODE_DIR, 'AGENTS.md')} so the model uses the
+  brain proactively (same text as the Codex tip; opencode names the tools brain_get_context,
+  brain_search_context, brain_keep_session, …).
+
+  opencode has no session-end hook either: sessions marked with /brain (or keep_session) are indexed
+  by the next ingest run (the Claude Code SessionEnd hook, or '${NPX} ingest' manually / on a schedule).`);
+}
+
 // 2. Slash commands + Codex prompts — generated from prompts.mjs so they always point at THIS
 // package (rename-safe) and always carry the CURRENT extraction rules. Each file is stamped with
 // a hash of what we wrote, which is what lets `serve` and the SessionStart hook refresh it later
@@ -73,6 +100,7 @@ const synced = syncPrompts({ mode: 'install' });
 for (const p of synced.backedUp) console.log(`▸ your previous version was kept at ${p}`);
 console.log(`▸ installed /brain, /state and /distill → ${CMD_DIR}`);
 if (existsSync(CODEX_HOME)) console.log(`▸ installed Codex /brain, /state and /distill prompts → ${join(CODEX_HOME, 'prompts')}`);
+if (existsSync(OPENCODE_DIR)) console.log(`▸ installed opencode /brain, /state and /distill commands → ${join(OPENCODE_DIR, 'commands')}`);
 console.log(`▸ these files are refreshed automatically on upgrade — by the MCP server and by the
   SessionStart hook, both of which run through '${NPX}'. If you use NEITHER (no 'brain' MCP server
   registered and no mark-keep hook), re-run '${NPX} install' after upgrading or /distill will keep
