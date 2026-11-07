@@ -247,16 +247,18 @@ The full deep dive lives in [`docs/ARCHITECTURE.md`](https://github.com/dasporti
 
 Retrieval quality is **measured, not eyeballed** — a labeled eval of real known-item questions runs against the real corpus, and every retrieval change must beat the previous baseline to ship ([method & history](https://github.com/dasportillo/brain-rag/blob/main/docs/EVAL-BASELINE.md)).
 
-| Metric | Value |
-|---|---|
-| Recall@8 | **0.97** |
-| Recall@5 | 0.97 |
-| MRR | 0.828 |
-| nDCG@8 | 0.863 |
-| Search latency (p50 / p95) | **91 ms / 102 ms** |
-| Corpus | 560 sessions · 30,792 chunks · 46 projects |
+Baseline of 2026-07-11 (v1.0.0): 123 real questions across 5 kinds (solution, exact-term, decision, state, entity), Spanish and English, over 560 sessions · 30,802 chunks.
 
-Ablation on the same set: vector-only search scores Recall@8 **0.87** — the exact-term leg is worth ~10 points, which is precisely the class of query (*error strings, function names, resource ids*) that matters in engineering work.
+| Metric | Default (hybrid) | `rerank: true` (opt-in) |
+|---|---|---|
+| Recall@1 | 0.59 | **0.76** |
+| Recall@5 | 0.80 | **0.85** |
+| Recall@8 | 0.85 | **0.86** |
+| MRR | 0.676 | **0.798** |
+| nDCG@8 | 0.718 | **0.814** |
+| Search latency (p50 / p95) | **92 ms / 107 ms** | 1,060 ms / 1,241 ms |
+
+Ablation on the same set: vector-only search scores Recall@8 **0.60** — the exact-term leg is worth ~25 points, which is precisely the class of query (*error strings, function names, resource ids*) that matters in engineering work. The corpus has grown since this baseline; re-measuring it is on the [roadmap](https://github.com/dasportillo/brain-rag/blob/main/docs/ROADMAP.md#next).
 
 ## 🔒 Privacy
 
@@ -314,7 +316,7 @@ Roughly 100–200 MB for the model (one-time) plus a database that grows with yo
 
 ## 🗺️ Roadmap
 
-Brain-RAG is evolving from *searchable history* into a full **long-term memory system** — the plan and its principles live in [`docs/ROADMAP.md`](https://github.com/dasportillo/brain-rag/blob/main/docs/ROADMAP.md):
+Brain-RAG grew from *searchable history* into a **long-term memory system** — what shipped, the principles, and what's still open live in [`docs/ROADMAP.md`](https://github.com/dasportillo/brain-rag/blob/main/docs/ROADMAP.md):
 
 - ✅ Hybrid retrieval (semantic + exact-term + recency), measured by a growing eval suite
 - ✅ Layer 2: distilled, typed memories with provenance and temporal lifecycle
@@ -333,9 +335,10 @@ Contributions are welcome — and the bar is refreshingly objective: **retrieval
 
 Great places to start:
 
-- 🧪 Grow the eval: more case kinds, more languages
-- 🔌 Adapters: transcript formats for more agents (Cursor, Windsurf, VS Code agent mode)
-- 🧹 What's next in the [roadmap](https://github.com/dasportillo/brain-rag/blob/main/docs/ROADMAP.md)
+- 🧪 Grow the eval: memory-targeted cases, `get_context` faithfulness, more languages
+- 🧹 The open list in the [roadmap](https://github.com/dasportillo/brain-rag/blob/main/docs/ROADMAP.md#next)
+
+Ingest is scoped to Claude Code, Codex and opencode; transcript adapters for more agents are not planned for now (other MCP clients can still connect to the brain).
 
 ```bash
 git clone https://github.com/dasportillo/brain-rag.git && cd brain-rag
