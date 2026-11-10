@@ -55,6 +55,7 @@ but transcript adapters for more agents are **not planned**.
 | 1.6.0 | 2026-11-06 | **opencode** support: MCP server, commands, ingest |
 | 1.7.0 | 2026-11-06 | opencode runs on its own: plugin that keeps, ingests and distills (with opencode's own model) |
 | 1.7.1–1.7.2 | 2026-11-06 | opencode on Windows (no console windows); README and reference brought up to date |
+| 1.7.3 | 2026-11-10 | Ingest matches kept sessions by session id: a transcript that changed folder (worktree → main repo) is indexed again and `keep.list` heals itself |
 
 ---
 
