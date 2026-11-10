@@ -20,21 +20,17 @@
 // cleanupPeriodDays (30 by default), so pruning "gone" sessions on every run quietly erased the
 // archive — 353 sessions in one run on 2026-11-06 (issue #47). They are now only COUNTED
 // ("archived"); removing indexed sessions is always explicit: `brain-rag forget` or --prune.
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { openDb, vecToBlob, stats, diffChunks, linkEntities } from './store.mjs';
-import { parseSession, projectFromPath, gitRootName, chunkText, redact, listSessions, sessionStat, sessionExists } from './transcripts.mjs';
+import { parseSession, projectFromPath, gitRootName, chunkText, redact, listSessions, sessionStat, sessionExists, resolveKept } from './transcripts.mjs';
 
 // OPT-IN: by default NOTHING is indexed. Only sessions whose transcript is listed in
 // keep.list get indexed. Entries are added by `BRAIN=1 claude` (the mark-keep.mjs
 // SessionStart hook) or by the /brain slash command mid-session (mark-current-keep.mjs).
 const KEEP_FILE = join(homedir(), '.claude', 'brain', 'keep.list');
-const KEPT = new Set(
-  existsSync(KEEP_FILE)
-    ? readFileSync(KEEP_FILE, 'utf8').split('\n').map(s => s.trim()).filter(Boolean)
-    : []
-);
+const readKeep = () => (existsSync(KEEP_FILE) ? readFileSync(KEEP_FILE, 'utf8').split('\n').map(s => s.trim()).filter(Boolean) : []);
 
 const args = process.argv.slice(2);
 const has = (f) => args.includes(f);
@@ -57,6 +53,29 @@ if (!NO_EMBED) ({ embed } = await import('./embed.mjs'));
 
 // Every registered adapter's session store; any may be absent (it contributes nothing then).
 const files = listSessions();
+// Kept sessions are matched by path, then by session id (issue #62): a transcript that changed
+// folder is still indexed, and keep.list is rewritten to point at where it lives now.
+const { kept: KEPT, moved, missing } = resolveKept(readKeep(), files);
+const isIndexed = db.prepare('SELECT 1 FROM sessions WHERE path = ?');
+if (moved.size) {
+  // Re-read right before writing so an entry a hook appended meanwhile is not lost; atomic swap.
+  const fresh = [...new Set(readKeep().map(e => moved.get(e) ?? e))];
+  const tmp = `${KEEP_FILE}.${process.pid}.tmp`;
+  writeFileSync(tmp, fresh.join('\n') + '\n');
+  renameSync(tmp, KEEP_FILE);
+  // A session indexed under its old path keeps its chunks (and embeddings): move them to the new
+  // path so the append-only diff below re-embeds nothing, instead of indexing it a second time.
+  const movSession = db.prepare('UPDATE sessions SET path = ? WHERE path = ?');
+  const movChunks = db.prepare('UPDATE chunks SET path = ? WHERE path = ?');
+  for (const [from, to] of moved) {
+    if (!isIndexed.get(from) || isIndexed.get(to)) continue;
+    db.exec('BEGIN'); movSession.run(to, from); movChunks.run(to, from); db.exec('COMMIT');
+  }
+  console.log(`  ↪ relinked ${moved.size} kept session(s) whose transcript changed folder (keep.list updated)`);
+}
+// Marked but never indexed, and no transcript anywhere: lost unless recovered by hand. Counted so
+// it shows in the log (sessions already indexed whose transcript was deleted are "archived").
+const keptLost = missing.filter(p => !isIndexed.get(p)).length;
 const getSession    = db.prepare('SELECT mtime, bytes FROM sessions WHERE path = ?');
 const delChunks     = db.prepare('DELETE FROM chunks WHERE path = ?');
 const delChunkById  = db.prepare('DELETE FROM chunks WHERE id = ?');
@@ -67,11 +86,11 @@ const upsertSession = db.prepare(`
     project=excluded.project, session=excluded.session, mtime=excluded.mtime,
     bytes=excluded.bytes, chunks=excluded.chunks, indexed_at=excluded.indexed_at, title=excluded.title`);
 
-let processed = 0, skipped = 0, failed = 0, totalChunks = 0;
+let processed = 0, skipped = 0, notKept = 0, failed = 0, totalChunks = 0;
 
 for (const file of files) {
   if (processed >= LIMIT) break;
-  if (!KEPT.has(file)) { skipped++; continue; } // opt-in: only index what is marked in keep.list
+  if (!KEPT.has(file)) { notKept++; continue; } // opt-in: only index what is marked in keep.list
   // One transcript failing (unreadable, malformed, too big) must never stop the others: before
   // issue #45 a single 594 MB transcript aborted every run, so nothing was indexed for weeks.
   try {
@@ -150,5 +169,5 @@ if (LIMIT === Infinity) {
   }
 }
 
-console.log(`\n✔ ingest: ${processed} processed, ${skipped} unchanged (skip), ${totalChunks} new chunks${pruned ? `, ${pruned} pruned (--prune)` : ''}${archived ? `, ${archived} archived (transcript gone, still searchable)` : ''}${failed ? `, ${failed} FAILED (see ✗ lines above)` : ''}${NO_EMBED ? ' (no embeddings)' : ''}`);
+console.log(`\n✔ ingest: ${processed} processed, ${skipped} unchanged, ${notKept} not kept, ${totalChunks} new chunks${moved.size ? `, ${moved.size} relinked (transcript moved)` : ''}${keptLost ? `, ${keptLost} kept without transcript (never indexed)` : ''}${pruned ? `, ${pruned} pruned (--prune)` : ''}${archived ? `, ${archived} archived (transcript gone, still searchable)` : ''}${failed ? `, ${failed} FAILED (see ✗ lines above)` : ''}${NO_EMBED ? ' (no embeddings)' : ''}`);
 console.log(stats(db));

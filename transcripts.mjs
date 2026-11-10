@@ -592,6 +592,40 @@ export function sessionRefOf(p) {
   return oc ? oc.sessionId : basename(String(p), '.jsonl');
 }
 
+// Which listed sessions keep.list opts in (issue #62). keep.list stores the transcript PATH as it
+// was when the session was marked, but the transcript can end up in another project folder — a
+// session opened in a worktree and saved under the main repo's folder, a deleted worktree. Exact
+// path matching dropped those sessions silently (80 of them on 2026-11-10). An entry is matched by
+// exact path first; when that path no longer exists, by its session id (sessionRefOf: the
+// .jsonl basename / opencode id) anywhere in the stores, newest transcript first if several.
+//   kept    — Set of listed paths to index
+//   moved   — Map stale entry → the path it resolved to (callers rewrite keep.list with it)
+//   missing — entries whose transcript exists nowhere
+export function resolveKept(entries, files, { exists = sessionExists, mtimeOf = (f) => sessionStat(f).mtimeMs } = {}) {
+  const listed = new Set(files);
+  const byRef = new Map();
+  for (const f of files) {
+    const ref = sessionRefOf(f);
+    if (byRef.has(ref)) byRef.get(ref).push(f); else byRef.set(ref, [f]);
+  }
+  const newest = (cands) => {
+    if (cands.length === 1) return cands[0];
+    const m = (f) => { try { return mtimeOf(f); } catch { return -1; } };
+    return cands.reduce((a, b) => (m(b) > m(a) ? b : a));
+  };
+  const kept = new Set(), moved = new Map(), missing = [];
+  for (const entry of new Set(entries)) {
+    if (listed.has(entry)) { kept.add(entry); continue; }
+    if (exists(entry)) continue; // still on disk, just outside every store: nothing to relink
+    const cands = byRef.get(sessionRefOf(entry));
+    if (!cands) { missing.push(entry); continue; }
+    const to = newest(cands);
+    kept.add(to);
+    moved.set(entry, to);
+  }
+  return { kept, moved, missing };
+}
+
 // All .jsonl transcripts under a root (any adapter's store); [] when the root doesn't exist.
 export function walkJsonl(dir) {
   if (!existsSync(dir)) return [];
