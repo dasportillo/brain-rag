@@ -191,3 +191,33 @@ test('isAlwaysKept: trailing slashes tolerated on either side', () => {
   assert.equal(isAlwaysKept('/a/repo/', ['/a/repo']), true);
   assert.equal(isAlwaysKept('/a/repo/sub', ['/a/repo/']), true);
 });
+
+// ---------------------------------------------------------------------------
+// Issue #65: the SessionEnd hook recognises a kept session by id, not only by path
+// ---------------------------------------------------------------------------
+test('isKeptSession: exact path, or the same session id under another folder; unmarked → false', async () => {
+  const { isKeptSession } = await import('../distill.mjs');
+  const P = '/h/.claude/projects';
+  const kept = [`${P}/-w-repo--claude-worktrees-gentle/618b1c43.jsonl`, '', `${P}/-w-repo/aaa.jsonl`];
+  assert.equal(isKeptSession(kept, `${P}/-w-repo/aaa.jsonl`), true, 'exact path');
+  assert.equal(isKeptSession(kept, `${P}/-w-repo/618b1c43.jsonl`), true, 'moved: matched by id');
+  assert.equal(isKeptSession(kept, `${P}/-w-repo/zzz.jsonl`), false, 'not marked');
+  assert.equal(isKeptSession([], `${P}/-w-repo/aaa.jsonl`), false);
+});
+
+test('findIndexedSession: exact path first, else the same session indexed under another path', async () => {
+  const { findIndexedSession } = await import('../distill.mjs');
+  const { openDb } = await import('../store.mjs');
+  const db = openDb();
+  const ins = db.prepare('INSERT INTO sessions(path,project,session,mtime,bytes,chunks,indexed_at,title) VALUES(?,?,?,?,?,?,?,?)');
+  const P = '/h/.claude/projects';
+  ins.run(`${P}/-w-repo/618b1c43.jsonl`, 'repo', '618b1c43', 1, 1, 1, 'now', 'moved one');
+  ins.run(`${P}/-w-repo/rollout-x.jsonl`, 'repo', null, 1, 1, 1, 'now', 'no session id recorded');
+  ins.run(`${P}/-w-repo/a_b.jsonl`, 'repo', null, 1, 1, 1, 'now', 'underscore is literal');
+
+  assert.equal(findIndexedSession(db, `${P}/-w-repo--claude-worktrees-x/618b1c43.jsonl`)?.title, 'moved one', 'by session id');
+  assert.equal(findIndexedSession(db, `${P}/-w-old/rollout-x.jsonl`)?.title, 'no session id recorded', 'by file name');
+  assert.equal(findIndexedSession(db, `${P}/-w-repo/618b1c43.jsonl`)?.path, `${P}/-w-repo/618b1c43.jsonl`, 'exact path');
+  assert.equal(findIndexedSession(db, `${P}/-w-repo/axb.jsonl`), undefined, "'_' does not act as a LIKE wildcard");
+  assert.equal(findIndexedSession(db, `${P}/-w-repo/nope.jsonl`), undefined);
+});

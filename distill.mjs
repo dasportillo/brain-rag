@@ -138,6 +138,26 @@ const sessionRef = (row) => row.session ?? sessionRefOf(row.path);
 // and the batch would re-pay its tokens (and re-save near-duplicate memories).
 export const sessionRefs = (row) => [...new Set([row.session, sessionRefOf(row.path)])].filter(Boolean);
 
+// Issue #65: the SessionEnd hook matched keep.list and the index by the EXACT transcript path, so a
+// session whose transcript changed folder (worktree → main repo, the #62 case) was skipped in
+// silence. ingest heals keep.list since 1.7.3, but this hook runs in parallel with it, so it
+// matches by session id itself. Pure (no I/O) / one query, exported for tests.
+export function isKeptSession(keptEntries, tp) {
+  const ref = sessionRefOf(tp);
+  return keptEntries.some(e => e && (e === tp || sessionRefOf(e) === ref));
+}
+const likeEscape = (s) => String(s).replace(/[\\%_]/g, (c) => '\\' + c);
+// The indexed row for transcript path tp: that exact path first, else the same session indexed
+// under another path (matched by the recorded session id or by the <id>.jsonl file name).
+export function findIndexedSession(db, tp) {
+  const ref = sessionRefOf(tp);
+  return db.prepare(`
+    SELECT path, project, session, title FROM sessions
+    WHERE path = ? OR session = ? OR path LIKE ? ESCAPE '\\'
+    ORDER BY (path = ?) DESC, mtime DESC LIMIT 1`)
+    .get(tp, ref, `%/${likeEscape(ref)}.jsonl`, tp);
+}
+
 export function hasClaude() {
   try { execFileSync('claude', ['--version'], { stdio: 'ignore' }); return true; }
   catch { return false; }
@@ -254,15 +274,17 @@ async function hookMain() {
     const tp = data.transcript_path;
     if (!tp) return;
     const kept = existsSync(KEEP_FILE) ? readFileSync(KEEP_FILE, 'utf8').split('\n').map(s => s.trim()) : [];
-    if (!kept.includes(tp)) return; // extraction is opt-in, exactly like indexing
+    if (!isKeptSession(kept, tp)) return; // extraction is opt-in, exactly like indexing (by id, #65)
     if (!hasClaude()) return;
     const db = openDb();
-    // The SessionEnd ingest hook runs in the background too — this session's chunks may not be
-    // committed yet. Poll briefly (we're backgrounded ourselves, so waiting blocks nobody).
-    for (let i = 0; i < 10 && !db.prepare('SELECT 1 FROM chunks WHERE path = ? LIMIT 1').get(tp); i++) {
+    // The SessionEnd ingest hook runs in the background too — this session may not be indexed yet.
+    // Poll briefly (we're backgrounded ourselves, so waiting blocks nobody). ingest writes the
+    // sessions row and its chunks in one transaction, so the row appearing means the chunks are in.
+    let row = findIndexedSession(db, tp);
+    for (let i = 0; i < 10 && !row; i++) {
       await new Promise(res => setTimeout(res, 3000));
+      row = findIndexedSession(db, tp);
     }
-    const row = db.prepare('SELECT path, project, session, title FROM sessions WHERE path = ?').get(tp);
     if (!row) return;
     console.log(`[distill --hook] ${new Date().toISOString()} ${row.project} · ${row.path}`);
     console.log('  ' + formatDistillResult(await distillSession(db, row)));
